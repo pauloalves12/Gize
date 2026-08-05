@@ -360,7 +360,7 @@ const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0xE09A5A, 0.0018);
 
 const camera = new THREE.PerspectiveCamera(48, innerWidth / innerHeight, 0.6, 14000);
-camera.position.set(326, 129, -99);
+camera.position.set(341, 121, -109);
 
 // water-plane clipping used only by the reflection pass (kept resident so the
 // clipping-plane count never changes → no per-frame shader recompiles)
@@ -369,7 +369,8 @@ renderer.clippingPlanes = [clipPlane];
 
 /* ---- procedural sky ----------------------------------------------------- */
 const skyUniforms = {
-  uSkyTop:   { value: C(0x23386E) },
+  uSkyTop:   { value: C(0x14265E) },
+  uSkyMid:   { value: C(0xC96A6E) },
   uSkyHorizon:{ value: C(0xFF9B45) },
   uSkyGround:{ value: C(0x6A4A2E) },
   uSunDir:   { value: new THREE.Vector3(-0.9, 0.17, 0.4).normalize() },
@@ -390,7 +391,7 @@ void main(){ vDir = position; gl_Position = projectionMatrix * modelViewMatrix *
 const SKY_FRAG = `
 precision highp float;
 varying vec3 vDir;
-uniform vec3 uSkyTop, uSkyHorizon, uSkyGround, uSunDir, uSunCol, uHazeCol;
+uniform vec3 uSkyTop, uSkyMid, uSkyHorizon, uSkyGround, uSunDir, uSunCol, uHazeCol;
 uniform float uSunGlow, uSunSize, uDiscInt, uHaze, uStars, uTime;
 
 float hash31(vec3 p){ return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453123); }
@@ -399,7 +400,8 @@ void main(){
   vec3 d = normalize(vDir);
   float el = d.y;
 
-  vec3 col = mix(uSkyHorizon, uSkyTop, pow(smoothstep(-0.05, 0.42, el), 0.80));
+  vec3 col = mix(mix(uSkyHorizon, uSkyMid, smoothstep(-0.03, 0.115, el)),
+                 uSkyTop, smoothstep(0.09, 0.47, el));
   col = mix(col, uSkyGround, smoothstep(0.0, -0.22, el));
 
   // stars + milky way
@@ -669,7 +671,7 @@ function makeWaterMaterial() {
         {
           float dd = clamp(vDepth / 6.5, 0.0, 1.0);
           diffuseColor.rgb *= mix(uShallow, uDeep, dd);
-          diffuseColor.a *= mix(0.60, 0.93, dd);
+          diffuseColor.a *= mix(0.66, 0.95, dd);
         }`)
       .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
         vec3 wN = vWaveN;
@@ -683,7 +685,7 @@ function makeWaterMaterial() {
         {
           vec3 Vv = normalize(cameraPosition - vWorldPos);
           vec3 Nw = normalize(mix(vec3(0.0, 1.0, 0.0), wN, 0.85));
-          float fres = mix(0.05, 1.0, pow(1.0 - clamp(dot(Nw, Vv), 0.0, 1.0), 3.4));
+          float fres = mix(0.05, 0.80, pow(1.0 - clamp(dot(Nw, Vv), 0.0, 1.0), 3.0));
           vec4 rp = uReflMatrix * vec4(vWorldPos, 1.0);
           vec2 ruv = rp.xy / max(rp.w, 1e-4) + wN.xz * uReflDistort;
           vec3 refl = texture2D(uReflTex, clamp(ruv, vec2(0.003), vec2(0.997))).rgb;
@@ -1138,43 +1140,43 @@ function buildSphinx() {
    9.  LIFE  —  palms, papyrus, scrub, villages, barges
    ========================================================================== */
 
-const PALM_TRUNK = [0x7A5230, 0x8C6038, 0x6B4526];
+const PALM_TRUNK = [0x8C6E48, 0x9C8058, 0x7A5F3E];
 const FROND = [0x2F7A24, 0x3C8F2A, 0x256B1F, 0x4C9E33];
 
 function buildPalmGeometry(seed) {
   const r = mulberry32(seed);
   const s = new BoxSoup();
-  const H = 6.2 + r() * 3.4;
+  const H = 6.4 + r() * 3.6;
   const segs = 8, bend = (r() - 0.5) * 1.3;
   const trunkCol = PALM_TRUNK[(r() * 3) | 0];
   for (let i = 0; i < segs; i++) {
     const t = i / segs, ty = t * t * bend;
-    const w = mix(0.72, 0.44, t);
+    const w = mix(0.46, 0.27, t);
     s.add(ty, H * t + H / segs / 2, ty * 0.4, w, H / segs * 1.06, w,
       C(trunkCol).multiplyScalar(0.86 + 0.14 * ((i % 2))), 63);
   }
   const cx = bend, cy = H, cz = bend * 0.4;
-  s.add(cx, cy + 0.18, cz, 1.0, 0.7, 1.0, C(0x6B4526), 63);
+  s.add(cx, cy + 0.16, cz, 0.72, 0.6, 0.72, C(0x6B4526), 63);
 
-  const nf = 8 + ((r() * 3) | 0);
+  const nf = 9 + ((r() * 3) | 0);
   for (let f = 0; f < nf; f++) {
     const a = (f / nf) * Math.PI * 2 + r() * 0.28;
     const pitch = 0.42 + r() * 0.55;
     const fc = C(FROND[(r() * FROND.length) | 0]);
-    const len = 4;
+    const len = 5;
     for (let k = 0; k < len; k++) {
-      const rr = 0.62 + k * 0.50;
-      const yy = cy + Math.sin(pitch) * rr - 0.42 * rr * rr * 0.30;
+      const rr = 0.52 + k * 0.46;
+      const yy = cy + Math.sin(pitch) * rr - 0.30 * rr * rr;
       const px = cx + Math.cos(a) * rr, pz = cz + Math.sin(a) * rr;
-      const droop = -Math.atan2(0.42 * rr, 1) + pitch * 0.4;
-      s.add(px, yy, pz, 0.66, 0.14, 0.50 - k * 0.055,
+      const droop = -Math.atan2(0.62 * rr, 1) + pitch * 0.35;
+      s.add(px, yy, pz, 0.60, 0.115, 0.46 - k * 0.05,
         fc.clone().multiplyScalar(0.84 + 0.16 * (1 - k / len)), 63, -a, droop);
     }
   }
   // dates
   for (let d = 0; d < 3; d++) {
     const a = d * 2.1;
-    s.add(cx + Math.cos(a) * 0.8, cy - 0.5, cz + Math.sin(a) * 0.8, 0.62, 0.8, 0.62, C(0xC98A22), 63);
+    s.add(cx + Math.cos(a) * 0.55, cy - 0.34, cz + Math.sin(a) * 0.55, 0.40, 0.52, 0.40, C(0xC07C1E), 63);
   }
   return s.geometry();
 }
@@ -1488,43 +1490,43 @@ const PRESETS = [
     name: 'Dawn',
     sunDir: new THREE.Vector3(0.88, 0.215, -0.43),
     sunCol: 0xFFB27A, sunInt: 2.8,
-    skyTop: 0x122F62, skyHor: 0xF6A472, skyGnd: 0x6B4A38,
+    skyTop: 0x122F62, skyMid: 0xA5719C, skyHor: 0xF6A472, skyGnd: 0x6B4A38,
     hemiSky: 0x7EA0D6, hemiGnd: 0x5A4A6A, hemiInt: 0.88,
     fillCol: 0x6D86C8, fillInt: 0.55, fillDir: new THREE.Vector3(-0.7, 0.5, 0.4),
     fog: 0xC49B90, fogD: 0.00040, exposure: 1.00, bloom: 0.48, stars: 0.18,
     sunGlow: 0.75, sunSize: 0.0145, discInt: 12, hazeCol: 0xFFC9A6, haze: 0.62,
-    torch: 0.20, waterShallow: 0xA0D6C8, waterDeep: 0x2A6E68, reflTint: 0xFFD8C0,
+    torch: 0.20, waterShallow: 0x74C6BE, waterDeep: 0x1D5C5C, reflTint: 0xFFD8C0,
     reflStr: 0.92, sparkle: 1.15, waterGlow: 0.008, goldEm: 0.60, envInt: 1.9,
   }),
   P({ // 1 — High Noon
     name: 'High Noon',
     sunDir: new THREE.Vector3(0.05, 0.965, 0.26),
     sunCol: 0xFFF8EC, sunInt: 5.2,
-    skyTop: 0x1655BE, skyHor: 0xB6DAFF, skyGnd: 0xA98F62,
+    skyTop: 0x1655BE, skyMid: 0x5AA6F0, skyHor: 0xBADCFF, skyGnd: 0xA98F62,
     hemiSky: 0xA6D2FF, hemiGnd: 0xD2AE6C, hemiInt: 1.35,
     fillCol: 0xBFD8FF, fillInt: 0.80, fillDir: new THREE.Vector3(-0.5, 0.35, -0.6),
     fog: 0xB6D2EE, fogD: 0.00026, exposure: 1.05, bloom: 0.34, stars: 0,
     sunGlow: 0.45, sunSize: 0.011, discInt: 16, hazeCol: 0xDCECFF, haze: 0.28,
-    torch: 0, waterShallow: 0x6FE0C4, waterDeep: 0x1E7A64, reflTint: 0xFFFFFF,
+    torch: 0, waterShallow: 0x5AD8B6, waterDeep: 0x14654F, reflTint: 0xFFFFFF,
     reflStr: 0.80, sparkle: 1.6, waterGlow: 0.0, goldEm: 0.30, envInt: 1.9,
   }),
   P({ // 2 — Golden Hour  (default)
     name: 'Golden Hour',
     sunDir: new THREE.Vector3(-0.34, 0.275, 0.90),
     sunCol: 0xFFD79C, sunInt: 4.4,
-    skyTop: 0x13265C, skyHor: 0xFF9B45, skyGnd: 0x7A4A28,
+    skyTop: 0x13265C, skyMid: 0xC96A6E, skyHor: 0xFF8C3A, skyGnd: 0x7A4A28,
     hemiSky: 0x5C6ACB, hemiGnd: 0x8A5A48, hemiInt: 0.72,
     fillCol: 0x7A82E0, fillInt: 0.55, fillDir: new THREE.Vector3(0.55, 0.45, -0.70),
     fog: 0xC08A6E, fogD: 0.00034, exposure: 1.00, bloom: 0.56, stars: 0.06,
     sunGlow: 0.70, sunSize: 0.0155, discInt: 12, hazeCol: 0xFFB070, haze: 0.60,
-    torch: 0.16, waterShallow: 0x7ACFB4, waterDeep: 0x1E6B52, reflTint: 0xFFC898,
+    torch: 0.16, waterShallow: 0x54C39C, waterDeep: 0x14563F, reflTint: 0xFFC898,
     reflStr: 0.95, sparkle: 1.45, waterGlow: 0.012, goldEm: 0.85, envInt: 2.10,
   }),
   P({ // 3 — Starry Night
     name: 'Starry Night',
     sunDir: new THREE.Vector3(0.48, 0.66, 0.58),
     sunCol: 0x8FB4FF, sunInt: 0.68,
-    skyTop: 0x040A1C, skyHor: 0x0E1B40, skyGnd: 0x080E20,
+    skyTop: 0x040A1C, skyMid: 0x081436, skyHor: 0x11224C, skyGnd: 0x080E20,
     hemiSky: 0x27395F, hemiGnd: 0x0F1426, hemiInt: 0.50,
     fillCol: 0x3F5A9A, fillInt: 0.26, fillDir: new THREE.Vector3(-0.5, 0.4, -0.6),
     fog: 0x0A1230, fogD: 0.00040, exposure: 1.25, bloom: 0.95, stars: 1.0,
@@ -1543,7 +1545,7 @@ const live = {
 };
 const NUMS = ['sunInt', 'hemiInt', 'fillInt', 'fogD', 'exposure', 'bloom', 'stars',
   'sunGlow', 'sunSize', 'discInt', 'haze', 'torch', 'reflStr', 'sparkle', 'waterGlow', 'goldEm', 'envInt'];
-const COLS = ['sunCol', 'skyTop', 'skyHor', 'skyGnd', 'hemiSky', 'hemiGnd', 'fillCol', 'fog', 'hazeCol',
+const COLS = ['sunCol', 'skyTop', 'skyMid', 'skyHor', 'skyGnd', 'hemiSky', 'hemiGnd', 'fillCol', 'fog', 'hazeCol',
   'waterShallow', 'waterDeep', 'reflTint'];
 
 let presetFrom = PRESETS[2], presetTo = PRESETS[2], presetT = 1, presetDur = 1;
@@ -1565,6 +1567,7 @@ function applyLighting(t) {
   hemi.color.copy(live.hemiSky); hemi.groundColor.copy(live.hemiGnd); hemi.intensity = live.hemiInt;
 
   skyUniforms.uSkyTop.value.copy(live.skyTop);
+  skyUniforms.uSkyMid.value.copy(live.skyMid);
   skyUniforms.uSkyHorizon.value.copy(live.skyHor);
   skyUniforms.uSkyGround.value.copy(live.skyGnd);
   skyUniforms.uSunDir.value.copy(live.sunDir);
@@ -1618,12 +1621,12 @@ function blendSnapshot() {
    ========================================================================== */
 
 const orbit = {
-  target: new THREE.Vector3(-30, 28, -16), tTarget: new THREE.Vector3(-30, 28, -16),
-  dist: 380, tDist: 380, theta: 1.800, tTheta: 1.800, phi: 1.300, tPhi: 1.300,
+  target: new THREE.Vector3(-40, 38, -20), tTarget: new THREE.Vector3(-40, 38, -20),
+  dist: 400, tDist: 400, theta: 1.800, tTheta: 1.800, phi: 1.3614, tPhi: 1.3614,
   idle: 0, auto: 0.0075,
 };
 const lookTarget = new THREE.Vector3().copy(orbit.target);
-let tour = false, tourT = 0, tourBlend = 0;
+let tour = false, tourT = 0;
 const TOUR_DUR = 62;
 
 const TOUR_POS = new THREE.CatmullRomCurve3([
@@ -1710,7 +1713,6 @@ function setupInput() {
 function updateCamera(dt) {
   const k = 1 - Math.pow(0.0016, dt);          // frame-rate independent damping
   if (tour) {
-    tourBlend = Math.min(1, tourBlend + dt / 1.6);
     tourT = (tourT + dt / TOUR_DUR) % 1;
     const p = TOUR_POS.getPointAt(tourT), l = TOUR_LOOK.getPointAt(tourT);
     camera.position.lerp(p, 1 - Math.pow(0.02, dt));
@@ -1769,7 +1771,7 @@ function toggleTour() {
       const u = i / 60, d = TOUR_POS.getPointAt(u).distanceTo(camera.position);
       if (d < bd) { bd = d; best = u; }
     }
-    tourT = best; tourBlend = 0;
+    tourT = best;
   }
   syncHud();
 }
