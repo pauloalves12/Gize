@@ -931,8 +931,8 @@ function buildEnclosure(p, floorY) {
     }
   };
   for (let x = p.x0; x <= p.x1; x += step) { edge(x, p.z0, 0, -1); edge(x, p.z1, 0, 1); }
+  // the east side stays open — that is the ceremonial approach the Sphinx faces
   for (let z = p.z0; z <= p.z1; z += step) { edge(p.x0, z, -1, 0); }
-  for (let z = p.z0; z <= p.z1; z += step) { edge(p.x1, z, 1, 0); }
 }
 
 /* ---- 7h. quays + harbour ------------------------------------------------ */
@@ -1514,11 +1514,11 @@ const PRESETS = [
   }),
   P({ // 2 — Golden Hour  (default)
     name: 'Golden Hour',
-    sunDir: new THREE.Vector3(-0.34, 0.275, 0.90),
+    sunDir: new THREE.Vector3(-0.80, 0.28, -0.53),
     sunCol: 0xFFD79C, sunInt: 5.0,
     skyTop: 0x13265C, skyMid: 0xC96A6E, skyHor: 0xFF8C3A, skyGnd: 0x7A4A28,
     hemiSky: 0x5C6ACB, hemiGnd: 0x8A5A48, hemiInt: 0.58,
-    fillCol: 0x7A82E0, fillInt: 0.55, fillDir: new THREE.Vector3(0.55, 0.45, -0.70),
+    fillCol: 0x7A82E0, fillInt: 0.55, fillDir: new THREE.Vector3(0.62, 0.45, 0.60),
     fog: 0xC08A6E, fogD: 0.00034, exposure: 1.00, bloom: 0.56, stars: 0.06,
     sunGlow: 0.70, sunSize: 0.0155, discInt: 12, hazeCol: 0xFFB070, haze: 0.60,
     torch: 0.16, waterShallow: 0x55BF88, waterDeep: 0x1C5C41, reflTint: 0xFFC898,
