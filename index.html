@@ -1820,7 +1820,7 @@ function buildBirds() {
     const birds = [];
     for (let i = 0; i < n; i++)
       birds.push({ r: 14 + rnd() * 26, ph: rnd() * 6.283, sp: 0.16 + rnd() * 0.13,
-                   yo: (rnd() - 0.5) * 9, sc: 1.5 + rnd() * 1.1 });
+                   yo: (rnd() - 0.5) * 9, sc: 0.42 + rnd() * 0.34 });
     FLOCKS.push({ mesh, birds, c: new THREE.Vector3(cx, cy, cz) });
   }
 }

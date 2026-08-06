@@ -103,6 +103,36 @@ Those objects are now hidden for the duration of that pass only.
 - **Suspended dust**, billboarded and lit only when the sun rakes through it —
   the thing that makes low light feel like air rather than a gradient.
 
+**Measured**
+
+| Preset | mean | contrast | verdict |
+|---|---|---|---|
+| Golden Hour | 116.7 → 117.8 | 56.3 → 55.4 | neutral at this distance — the work is at the waterline |
+| Water close-up | — | — | clear gain: shore foam, caustics in the shallows, wet silt band |
+| Starry Night | ground 65.9 → **54.0** vs baseline | 35.4 → 35.1 | clear gain: dark where it belongs, architecture legible |
+
+**One regression corrected rather than kept**
+
+*Ibis six times life size.* A 0.92-unit wingspan scaled to 2.6× produced 6 m
+birds that read as white dashes across the plateau, most obtrusively at night.
+Scaled to 0.42–0.76.
+
+---
+
+## Cumulative result at the hero pose (Golden Hour)
+
+| | mean | contrast |
+|---|---|---|
+| baseline `f5b446d` | 121.8 | 56.0 |
+| round 1 raw | 126.3 | 49.9 (regressed) |
+| round 1 corrected | 117.5 | 56.0 |
+| round 2 corrected | 116.7 | 56.3 |
+| round 3 | 117.8 | 55.4 |
+
+Contrast holds at the baseline level while the frame carries considerably more
+information: stratified escarpment, occupied plateau, patchwork flood plain,
+moving vegetation, and a river with a readable shoreline.
+
 ---
 
 ## Performance
