@@ -203,6 +203,33 @@ for (const v of VILLAGES) pad({ x0: v.x0 - 4, x1: v.x1 + 4, z0: v.z0 - 4, z1: v.
 pad({ ...MARSH, y: MARSH_Y, feather: 14, occupy: false });
 for (const i of ISLANDS) pad({ x0: i.x0, x1: i.x1, z0: i.z0, z1: i.z1, y: i.y, feather: 11, occupy: false });
 
+/* ---- cultivated plots: basin-irrigated patchwork on the flood plain ------ */
+const CROPS = [
+  { c: 0x6FA22E, h: 0.34 },   // young emmer
+  { c: 0xC2A22C, h: 0.46 },   // ripe barley
+  { c: 0x3F7A2A, h: 0.30 },   // flax
+  { c: 0x8A9A38, h: 0.24 },   // onions / greens
+  { c: 0x9C8446, h: 0.00 },   // fallow
+];
+const FIELDS = [];
+function layFields() {
+  const fr = mulberry32(0x5EED);
+  for (let x = 86; x < 258; x += 21) {
+    for (let z = WZ0 + 10; z < WZ1 - 10; z += 26) {
+      const x0 = x + fr() * 3, x1 = x + 18 - fr() * 3;
+      const z0 = z + fr() * 4, z1 = z + 22 - fr() * 4;
+      FIELDS.push({ x0, x1, z0, z1, crop: (fr() * CROPS.length) | 0 });
+    }
+  }
+}
+function fieldAt(x, z) {
+  for (let i = 0; i < FIELDS.length; i++) {
+    const f = FIELDS[i];
+    if (x >= f.x0 && x <= f.x1 && z >= f.z0 && z <= f.z1) return f;
+  }
+  return null;
+}
+
 /* ---- height field ------------------------------------------------------- */
 function duneHeight(x, z) {
   const warp = 0.35 * vnoise(x * 0.0035, z * 0.0035);
@@ -491,6 +518,24 @@ const matGold = new THREE.MeshStandardMaterial({
   emissive: 0xFFB020, emissiveIntensity: 0.35, envMapIntensity: 3.0,
 });
 const matVeg = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.78, metalness: 0.0, envMapIntensity: 0.7 });
+const WIND = { uTime: { value: 0 }, uWindAmp: { value: 1.0 } };
+matVeg.onBeforeCompile = (sh) => {
+  Object.assign(sh.uniforms, WIND);
+  sh.vertexShader = sh.vertexShader
+    .replace('#include <common>', '#include <common>\nuniform float uTime, uWindAmp;')
+    .replace('#include <begin_vertex>', `#include <begin_vertex>
+      {
+        vec4 iw = vec4(transformed, 1.0);
+        #ifdef USE_INSTANCING
+          iw = instanceMatrix * iw;
+        #endif
+        vec3 wp = (modelMatrix * iw).xyz;
+        float amp = pow(max(transformed.y, 0.0) * 0.17, 1.6) * uWindAmp;
+        float ph = wp.x * 0.052 + wp.z * 0.041 + uTime * 1.30;
+        transformed.x += (sin(ph) + 0.45 * sin(ph * 2.4 + 1.1)) * amp;
+        transformed.z += cos(ph * 0.87 + 0.7) * amp * 0.65;
+      }`);
+};
 const matProp = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.70, metalness: 0.04, envMapIntensity: 0.8 });
 
 /* ---- atmosphere & surface detail -----------------------------------------
@@ -653,11 +698,22 @@ function terrainColour(x, z, h, slope, out) {
 
   if (h < WATER_Y - 0.1) {                                   // river bed
     out.copy(COL_BED).lerp(COL_BED_DEEP, clamp((WATER_Y - h) / 7, 0, 1));
+  } else if (h < WATER_Y + 1.1) {                             // wet silt band
+    out.copy(COL_SILT_DARK).lerp(COL_BED, 0.35 + mottle * 0.5);
+    out.multiplyScalar(0.78 + mottle * 0.14);
   } else if (x > 84 && h < WATER_Y + 7.2) {                   // lush flood plain
     const lush = 1 - sstep(WATER_Y + 2.4, WATER_Y + 7.2, h);
     out.copy(COL_SILT).lerp(COL_GRASS_DEEP, lush * 0.92);
     out.lerp(COL_GRASS, clamp(0.55 + broad * 1.6, 0, 1) * lush);
     out.lerp(COL_GRASS_LIGHT, clamp(mottle * 1.4, 0, 1) * lush * 0.8);
+    const f = fieldAt(x, z);
+    if (f && !isOccupied(x, z)) {
+      // dyke lines read as darker wet silt between the basins
+      const edge = Math.min(x - f.x0, f.x1 - x, z - f.z0, f.z1 - z);
+      tmpCol2.setHex(CROPS[f.crop].c).offsetHSL(0, 0, mottle * 0.07);
+      out.lerp(tmpCol2, edge < 1.6 ? 0.15 : 0.82 * lush + 0.18);
+      if (edge < 1.6) out.multiplyScalar(0.72);
+    }
   } else if (x > 74 && h < 20) {                              // dry valley margin
     out.copy(COL_SILT).lerp(COL_SILT_DARK, 0.35 + broad);
     out.lerp(COL_GRASS_DEEP, clamp(0.22 + broad * 1.2, 0, 0.55));
@@ -828,6 +884,15 @@ function makeWaterMaterial() {
           float dd = clamp(vDepth / 6.5, 0.0, 1.0);
           diffuseColor.rgb *= mix(uShallow, uDeep, dd);
           diffuseColor.a *= mix(0.66, 0.95, dd);
+          // sunlight bouncing off the shallow bed
+          float caustic = (1.0 - dd) * (0.5 + 0.5 * sin(vWorldPos.x * 0.55 + uTime * 1.7)
+                                              * sin(vWorldPos.z * 0.61 - uTime * 1.3));
+          diffuseColor.rgb += uShallow * caustic * 0.30;
+          // foam where the sheet runs out over the bed
+          float foam = smoothstep(0.85, 0.06, vDepth) * (0.55 + 0.45 * sin(vWorldPos.x * 1.4
+                       + vWorldPos.z * 1.1 + uTime * 2.2));
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.90, 0.95, 0.92), foam * 0.55);
+          diffuseColor.a = mix(diffuseColor.a, 0.95, foam * 0.6);
         }`)
       .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
         vec3 wN = vWaveN;
@@ -848,6 +913,11 @@ function makeWaterMaterial() {
           gl_FragColor.rgb = mix(gl_FragColor.rgb, refl * uReflTint, fres * uReflStrength * vTopFace);
           vec3 Hh = normalize(Vv + uSunDirW);
           gl_FragColor.rgb += uSunColW * pow(max(dot(Nw, Hh), 0.0), 800.0) * 7.0 * vTopFace * uSparkle;
+          // a second, tighter glitter layer riding the fine ripples
+          vec3 gN = normalize(vec3(wN.x * 2.4 + sin(vWorldPos.x * 3.1 + uTime * 4.0) * 0.10,
+                                   1.0,
+                                   wN.z * 2.4 + cos(vWorldPos.z * 3.4 - uTime * 3.4) * 0.10));
+          gl_FragColor.rgb += uSunColW * pow(max(dot(gN, Hh), 0.0), 2600.0) * 22.0 * vTopFace * uSparkle;
           gl_FragColor.rgb += uShallow * uGlow * vTopFace;
           gl_FragColor.a = mix(gl_FragColor.a, 1.0, fres * 0.6);
         }`);
@@ -984,6 +1054,16 @@ function batteredMass(x0, z0, x1, z1, y0, h, batter, c, courseH = 0.8) {
     });
   }
 }
+function cavettoCornice(x0, z0, x1, z1, yTop, c = LIME_W, sc = 1) {
+  const w = x1 - x0, d = z1 - z0, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
+  pushBox(stoneList, cx, yTop + 0.30 * sc, cz, w + 0.55 * sc, 0.60 * sc, d + 0.55 * sc, c);
+  for (let i = 0; i < 4; i++) {                                                   // flaring cavetto
+    const g = (0.55 + i * 0.42) * sc;
+    pushBox(stoneList, cx, yTop + (0.75 + i * 0.42) * sc, cz, w + g, 0.44 * sc, d + g, c);
+  }
+  pushBox(stoneList, cx, yTop + 2.62 * sc, cz, w + 2.45 * sc, 0.34 * sc, d + 2.45 * sc, LIME);
+}
+
 const plinth = (x0, z0, x1, z1, y, c = LIME_D) =>
   pushBox(stoneList, (x0 + x1) / 2, y - 20, (z0 + z1) / 2, x1 - x0, 40, z1 - z0, c);
 
@@ -1001,6 +1081,25 @@ function buildObelisk(x, z, baseY, h = 12, w = 1.45) {
     const s = tip * (1 - i / 4.2);
     pushBox(goldList, x, baseY + 0.9 + n * 0.55 + i * 0.45 + 0.225, z, s, 0.47, s, 0xFFD700);
   }
+}
+
+/* ---- 7c-bis. seated colossus, facing east down the causeway ------------- */
+function buildColossus(x, z, baseY, sc = 1.0) {
+  const S = (dx, dy, dz, sx, sy, sz, c) =>
+    pushBox(stoneList, x + dx * sc, baseY + dy * sc, z + dz * sc, sx * sc, sy * sc, sz * sc, c);
+  const SK = 0xE4D6B4, DK = 0xB9A87F, NM = 0x2A62A0, GD = 0xD9A828;
+  S(0, 0.35, 0, 2.6, 0.7, 2.2, LIME_D);                       // pedestal
+  S(-0.35, 1.5, 0, 1.5, 1.6, 1.8, SK);                        // legs / lap
+  S(0.55, 0.85, 0, 1.1, 1.3, 1.7, SK);                        // shins
+  S(0.85, 0.28, 0, 1.5, 0.35, 1.8, DK);                       // feet
+  S(-0.75, 3.0, 0, 1.5, 1.5, 1.9, SK);                        // torso
+  S(-0.72, 3.85, 0, 1.7, 0.5, 2.1, NM);                       // broad collar
+  for (const sgn of [-1, 1]) S(-0.5, 2.5, sgn * 1.0, 1.0, 1.9, 0.5, SK);  // arms on the knees
+  S(-0.78, 4.55, 0, 0.9, 1.0, 1.0, SK);                       // head
+  S(-0.78, 4.95, 0, 1.25, 0.85, 1.7, NM);                      // nemes
+  S(-0.30, 4.55, 0, 0.42, 0.5, 0.5, SK);                       // face plane
+  S(-0.30, 4.05, 0, 0.4, 0.75, 0.4, DK);                       // beard
+  S(-0.78, 5.55, 0, 0.55, 0.7, 0.55, GD);                      // crown finial
 }
 
 /* ---- 7d. brazier (stone bowl + flame slot) ------------------------------ */
@@ -1022,10 +1121,17 @@ function buildTemple(t, opts = {}) {
   // east front: twin pylons flanking the gateway
   batteredMass(x1 - wall, z0, x1, zm - gate / 2, y, pylonH, 0.10, LIME);
   batteredMass(x1 - wall, zm + gate / 2, x1, z1, y, pylonH, 0.10, LIME);
-  // side + rear walls
+  // side + rear walls, each crowned with a cavetto cornice
   batteredMass(x0, z0, x0 + wall, z1, y, wallH, 0.09, LIME);
   batteredMass(x0, z0, x1, z0 + wall, y, wallH, 0.09, LIME);
   batteredMass(x0, z1 - wall, x1, z1, y, wallH, 0.09, LIME);
+  const bt = 0.09 * wallH;
+  cavettoCornice(x0 + bt, z0 + bt, x0 + wall - bt, z1 - bt, y + wallH);
+  cavettoCornice(x0 + bt, z0 + bt, x1 - bt, z0 + wall - bt, y + wallH);
+  cavettoCornice(x0 + bt, z1 - wall + bt, x1 - bt, z1 - bt, y + wallH);
+  const pt = 0.10 * pylonH;
+  cavettoCornice(x1 - wall + pt, z0 + pt, x1 - pt, zm - gate / 2 - pt, y + pylonH);
+  cavettoCornice(x1 - wall + pt, zm + gate / 2 + pt, x1 - pt, z1 - pt, y + pylonH);
 
   // entrance ramp + flanking obelisks
   for (let i = 0; i < 6; i++)
@@ -1034,6 +1140,10 @@ function buildTemple(t, opts = {}) {
   buildObelisk(x1 + 5.0, zm + gate / 2 + 3.4, y, opts.obelisk ?? 13);
   buildBrazier(x1 + 2.4, y + 1.4, zm - gate / 2 - 1.6);
   buildBrazier(x1 + 2.4, y + 1.4, zm + gate / 2 + 1.6);
+  if (opts.colossi !== false) {
+    buildColossus(x1 + 1.9, zm - gate / 2 - 1.9, y + 0.9);
+    buildColossus(x1 + 1.9, zm + gate / 2 + 1.9, y + 0.9);
+  }
 
   // colonnaded court — square granite pillars with abaci
   const px0 = x0 + wall + 5, px1 = x1 - wall - 5, pz0 = z0 + wall + 5, pz1 = z1 - wall - 5;
@@ -1042,8 +1152,15 @@ function buildTemple(t, opts = {}) {
     if (i > 0 && i < cols && j > 0 && j < rows) continue;          // open centre
     const px = mix(px0, px1, i / cols), pz = mix(pz0, pz1, j / rows);
     const gcol = ((i + j) % 3 === 0) ? GRAN_R : GRAN_G;
-    for (let k = 0; k < 5; k++) pushBox(stoneList, px, y + 1.0 + k * 0.9 + 0.45, pz, 1.5, 0.92, 1.5, gcol);
-    pushBox(stoneList, px, y + 6.0, pz, 2.0, 0.7, 2.0, LIME);      // abacus
+    pushBox(stoneList, px, y + 1.15, pz, 2.05, 0.45, 2.05, gcol);                  // torus base
+    for (let k = 0; k < 5; k++) {
+      const sw = mix(1.62, 1.30, k / 5);
+      pushBox(stoneList, px, y + 1.6 + k * 0.82 + 0.41, pz, sw, 0.84, sw, gcol);   // tapered shaft
+    }
+    for (let k = 0; k < 3; k++)                                                    // lotus-bud capital
+      pushBox(stoneList, px, y + 5.75 + k * 0.34, pz, 1.34 + k * 0.34, 0.36, 1.34 + k * 0.34, gcol);
+    pushBox(stoneList, px, y + 6.95, pz, 2.35, 0.42, 2.35, LIME_W);                // abacus
+    pushBox(stoneList, px, y + 7.5, pz, 2.0, 0.7, 2.0, LIME);                      // architrave stub
   }
   // sanctuary at the west end, stepped setbacks
   const sx0 = x0 + wall + 1.5, sx1 = sx0 + Math.min(15, (x1 - x0) * 0.3);
@@ -1109,6 +1226,39 @@ function buildQuays() {
   }
 }
 
+/* ---- 7h-bis. mastaba fields — the courtiers' cemeteries ----------------- */
+const MASTABA_FIELDS = [
+  { x0: 6,  x1: 40, z0: -54,  z1: 2,    pitch: 11 },
+  { x0: 6,  x1: 40, z0: 30,   z1: 58,   pitch: 11 },
+  { x0: 8,  x1: 38, z0: -168, z1: -132, pitch: 12 },
+  { x0: -8, x1: 34, z0: 80,   z1: 134,  pitch: 12 },
+];
+function buildMastabas() {
+  const mr = mulberry32(0x3A57);
+  for (const f of MASTABA_FIELDS) {
+    const P = f.pitch;
+    for (let gx = f.x0 + P * 0.5; gx <= f.x1 - P * 0.4; gx += P) {
+      for (let gz = f.z0 + P * 0.5; gz <= f.z1 - P * 0.4; gz += P) {
+        const w = P * (0.52 + mr() * 0.22), d = P * (0.44 + mr() * 0.20), hh = 2.2 + mr() * 2.0;
+        const cx = gx + (mr() - 0.5) * 1.1, cz = gz + (mr() - 0.5) * 1.1;
+      if (isOccupied(cx, cz) || isOccupied(cx + w / 2, cz) || isOccupied(cx - w / 2, cz)) continue;
+      const gy = sampleH(cx, cz);
+      if (gy < 34 || gy > 50) continue;                       // plateau shelf only
+      const shade = 0.90 + mr() * 0.16;
+      const col = new THREE.Color(LIME_D).multiplyScalar(shade).getHex();
+      plinth(cx - w / 2, cz - d / 2, cx + w / 2, cz + d / 2, gy, col);
+      batteredMass(cx - w / 2, cz - d / 2, cx + w / 2, cz + d / 2, gy - 0.3, hh, 0.16, col, 0.62);
+      const it = 0.16 * hh;
+      cavettoCornice(cx - w / 2 + it, cz - d / 2 + it, cx + w / 2 - it, cz + d / 2 - it, gy - 0.3 + hh, col,
+                     clamp(Math.min(w, d) / 11, 0.40, 0.85));
+      // false door and offering slab on the east face
+      pushBox(stoneList, cx + w / 2 - 0.2, gy + hh * 0.42, cz, 0.5, hh * 0.72, 1.0, GRAN_R);
+      pushBox(stoneList, cx + w / 2 + 1.0, gy + 0.25, cz, 1.6, 0.5, 1.4, LIME);
+      }
+    }
+  }
+}
+
 /* ---- 7i. assemble the plateau ------------------------------------------ */
 function buildMonuments() {
   buildPyramid(KHUFU, PLATEAU_Y - 0.3);
@@ -1123,11 +1273,12 @@ function buildMonuments() {
     pushBox(stoneList, MENKAURE.cx, PLATEAU_Y - 0.3 + i * 0.75 + 0.38, MENKAURE.cz, s * 1.004, 0.78, s * 1.004, GRAN_R);
   }
 
-  for (const m of MORTUARY) buildTemple(m, { wallH: 7.2, pylonH: 10.4, obelisk: 11 });
+  for (const m of MORTUARY) buildTemple(m, { wallH: 7.2, pylonH: 10.4, obelisk: 11, colossi: false });
   for (const t of VALLEY_T) buildTemple(t, { wallH: 6.4, pylonH: 9.6, obelisk: 13 });
   for (const c of CAUSEWAYS) buildCauseway(c);
   buildEnclosure(SPHINX_PAD, SPHINX_Y);
   buildQuays();
+  buildMastabas();
 
   // stela between the Sphinx's paws
   pushBox(stoneList, 80.5, SPHINX_Y + 1.9, -24, 0.9, 3.8, 3.0, GRAN_R);
@@ -1374,6 +1525,35 @@ function buildScrubGeometry(seed) {
   return s.geometry();
 }
 
+function buildBoulderGeometry(seed) {
+  const r = mulberry32(seed);
+  const s = new BoxSoup();
+  const base = C([0xC9BB94, 0xB4A47C, 0xD3C6A2][(r() * 3) | 0]);
+  const n = 4 + ((r() * 4) | 0);
+  for (let i = 0; i < n; i++) {
+    const a = r() * 6.283, rad = r() * 1.1;
+    s.add(Math.cos(a) * rad, 0.35 + r() * 1.0, Math.sin(a) * rad,
+      1.0 + r() * 1.7, 0.7 + r() * 1.5, 1.0 + r() * 1.7,
+      base.clone().multiplyScalar(0.82 + r() * 0.36), 63, r() * 1.5, 0);
+  }
+  return s.geometry();
+}
+
+function buildLotusGeometry(seed) {
+  const r = mulberry32(seed);
+  const s = new BoxSoup();
+  for (let i = 0; i < 7; i++) {
+    const a = r() * 6.283, rad = 0.4 + r() * 1.9;
+    const pad = C(0x2F6B34).multiplyScalar(0.82 + r() * 0.4);
+    s.add(Math.cos(a) * rad, 0.06, Math.sin(a) * rad, 0.85 + r() * 0.5, 0.11, 0.85 + r() * 0.5, pad, 63, r() * 1.5, 0);
+    if (r() > 0.62) {
+      s.add(Math.cos(a) * rad, 0.34, Math.sin(a) * rad, 0.26, 0.42, 0.26, C(0xE8E0F0), 63);
+      s.add(Math.cos(a) * rad, 0.60, Math.sin(a) * rad, 0.34, 0.24, 0.34, C(0xD8A8D8), 63);
+    }
+  }
+  return s.geometry();
+}
+
 function buildHouseGeometry(seed) {
   const r = mulberry32(seed);
   const s = new BoxSoup();
@@ -1456,7 +1636,8 @@ function scatter(geoms, material, spec) {
     if (!spec.accept(x, z, h)) continue;
     if (spec.avoidBuilt && isOccupied(x, z)) continue;
     if (spec.density && r() > spec.density(x, z)) continue;
-    buckets[(r() * geoms.length) | 0].push({ x, y: h - (spec.sink ?? 0.4), z, s: mix(spec.s0, spec.s1, r()), rot: r() * 6.283 });
+    const yBase = spec.onWater ? WATER_Y - 0.1 : h - (spec.sink ?? 0.4);
+    buckets[(r() * geoms.length) | 0].push({ x, y: yBase, z, s: mix(spec.s0, spec.s1, r()), rot: r() * 6.283 });
     placed++;
   }
   const out = [];
@@ -1515,6 +1696,24 @@ function populateLife() {
     density: (x, z) => clamp(0.30 + (fbm(x * 0.06 + 33, z * 0.06 + 11, 2) - 0.4) * 2.0, 0.05, 1),
   });
 
+  // wind-carved boulders break up the escarpment terraces
+  const rockGeos = [buildBoulderGeometry(7), buildBoulderGeometry(31), buildBoulderGeometry(89)];
+  scatter(rockGeos, matProp, {
+    seed: 6006, count: 340, x0: WX0, x1: 264, z0: WZ0, z1: WZ1, s0: 0.22, s1: 0.72,
+    avoidBuilt: true, shadow: true, sink: 0.9,
+    accept: (x, z, h) => h > 14 && (x < -150 || (x > 30 && x < 100) || x > 240),
+    density: (x, z) => clamp(0.22 + (fbm(x * 0.04 + 71, z * 0.04 + 13, 2) - 0.42) * 2.4, 0.04, 1),
+  });
+
+  // lotus rafts in the still shallows
+  const lotusGeos = [buildLotusGeometry(13), buildLotusGeometry(67)];
+  scatter(lotusGeos, matVeg, {
+    seed: 7007, count: 420, x0: 92, x1: 258, z0: WZ0, z1: WZ1, s0: 0.8, s1: 1.7,
+    avoidBuilt: true, shadow: false, onWater: true,
+    accept: (x, z, h) => h > WATER_Y - 2.6 && h < WATER_Y - 0.4,
+    density: (x, z) => clamp(0.2 + (fbm(x * 0.045 + 5, z * 0.045 + 55, 2) - 0.45) * 2.6, 0.03, 1),
+  });
+
   // formal palm avenues flanking the lower causeways
   const avenue = [];
   for (const c of CAUSEWAYS) {
@@ -1571,6 +1770,58 @@ function populateLife() {
     mesh.instanceMatrix.needsUpdate = true;
     mesh.castShadow = true; mesh.receiveShadow = true; mesh.frustumCulled = false;
     scene.add(mesh);
+  }
+}
+
+/* ---- suspended dust: the thing that makes low sun feel like air --------- */
+let dustMesh = null, dustMat = null;
+function buildDust() {
+  const N = 2600;
+  const geo = new THREE.PlaneGeometry(1, 1);
+  dustMat = new THREE.MeshBasicMaterial({
+    color: new THREE.Color(1, 0.85, 0.62), transparent: true, opacity: 0.5,
+    blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+  });
+  dustMesh = new THREE.InstancedMesh(geo, dustMat, N);
+  dustMesh.frustumCulled = false;
+  dustMesh.renderOrder = 4;
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sv = new THREE.Vector3(), pv = new THREE.Vector3();
+  for (let i = 0; i < N; i++) {
+    const x = mix(-260, 300, rnd()), z = mix(WZ0, WZ1, rnd());
+    const g = sampleH(x, z);
+    const y = Math.max(g, WATER_Y) + 1.5 + Math.pow(rnd(), 1.6) * 26;
+    const sc = 0.22 + rnd() * 0.55;
+    q.identity();   // the parent is billboarded; per-mote spin would fight it
+    sv.set(sc, sc, sc); pv.set(x, y, z);
+    m4.compose(pv, q, sv);
+    dustMesh.setMatrixAt(i, m4);
+  }
+  dustMesh.instanceMatrix.needsUpdate = true;
+  scene.add(dustMesh);
+}
+
+/* ---- ibis flocks over the marshes -------------------------------------- */
+const FLOCKS = [];
+function buildBirds() {
+  const soup = new BoxSoup();
+  soup.add(0, 0, 0, 0.42, 0.16, 0.24, C(0xF4F0E4));            // body
+  soup.add(-0.24, 0.02, 0, 0.26, 0.10, 0.16, C(0x2A2A2E));     // head + bill
+  soup.add(0, 0.05, 0.52, 0.30, 0.08, 0.92, C(0xF4F0E4));      // wings
+  soup.add(0, 0.05, -0.52, 0.30, 0.08, 0.92, C(0xF4F0E4));
+  const geo = soup.geometry();
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, metalness: 0 });
+  patchMaterial(mat, null);
+  const centres = [[150, 44, -30], [176, 52, 96], [118, 38, 150], [196, 60, -120]];
+  for (const [cx, cy, cz] of centres) {
+    const n = 9 + ((rnd() * 8) | 0);
+    const mesh = new THREE.InstancedMesh(geo, mat, n);
+    mesh.frustumCulled = false;
+    scene.add(mesh);
+    const birds = [];
+    for (let i = 0; i < n; i++)
+      birds.push({ r: 14 + rnd() * 26, ph: rnd() * 6.283, sp: 0.16 + rnd() * 0.13,
+                   yo: (rnd() - 0.5) * 9, sc: 1.5 + rnd() * 1.1 });
+    FLOCKS.push({ mesh, birds, c: new THREE.Vector3(cx, cy, cz) });
   }
 }
 
@@ -1649,7 +1900,7 @@ const PRESETS = [
     skyTop: 0x122F62, skyMid: 0xA5719C, skyHor: 0xF6A472, skyGnd: 0x6B4A38,
     hemiSky: 0x7EA0D6, hemiGnd: 0x5A4A6A, hemiInt: 0.88,
     fillCol: 0x6D86C8, fillInt: 0.55, fillDir: new THREE.Vector3(-0.7, 0.5, 0.4),
-    fog: 0xC49B90, fogD: 0.00044, fogSun: 0xFFD2A8, fogSunStr: 1.10, fogGround: 3.4, exposure: 1.00, bloom: 0.48, stars: 0.18,
+    fog: 0xC49B90, fogD: 0.00044, fogSun: 0xFFD2A8, fogSunStr: 1.10, fogGround: 3.4, dust: 0.55, exposure: 1.00, bloom: 0.48, stars: 0.18,
     sunGlow: 0.75, sunSize: 0.0145, discInt: 12, hazeCol: 0xFFC9A6, haze: 0.62,
     torch: 0.20, waterShallow: 0x6BC3A0, waterDeep: 0x225E52, reflTint: 0xFFD8C0,
     reflStr: 0.92, sparkle: 1.15, waterGlow: 0.008, goldEm: 0.60, envInt: 1.15,
@@ -1661,7 +1912,7 @@ const PRESETS = [
     skyTop: 0x1655BE, skyMid: 0x5AA6F0, skyHor: 0xBADCFF, skyGnd: 0xA98F62,
     hemiSky: 0xA6D2FF, hemiGnd: 0xD2AE6C, hemiInt: 1.10,
     fillCol: 0xBFD8FF, fillInt: 0.80, fillDir: new THREE.Vector3(-0.5, 0.35, -0.6),
-    fog: 0xB6D2EE, fogD: 0.00026, fogSun: 0xFFF4E2, fogSunStr: 0.35, fogGround: 1.3, exposure: 0.97, bloom: 0.40, stars: 0,
+    fog: 0xB6D2EE, fogD: 0.00026, fogSun: 0xFFF4E2, fogSunStr: 0.35, fogGround: 1.3, dust: 0.16, exposure: 0.97, bloom: 0.40, stars: 0,
     sunGlow: 0.45, sunSize: 0.011, discInt: 16, hazeCol: 0xDCECFF, haze: 0.28,
     torch: 0, waterShallow: 0x50CE8C, waterDeep: 0x1B6B47, reflTint: 0xFFFFFF,
     reflStr: 0.80, sparkle: 1.6, waterGlow: 0.0, goldEm: 0.30, envInt: 1.55,
@@ -1673,7 +1924,7 @@ const PRESETS = [
     skyTop: 0x13265C, skyMid: 0xC96A6E, skyHor: 0xFF8C3A, skyGnd: 0x7A4A28,
     hemiSky: 0x5C6ACB, hemiGnd: 0x8A5A48, hemiInt: 0.58,
     fillCol: 0x7A82E0, fillInt: 0.55, fillDir: new THREE.Vector3(0.62, 0.45, 0.60),
-    fog: 0xC08A6E, fogD: 0.00036, fogSun: 0xFFB870, fogSunStr: 1.20, fogGround: 2.6, exposure: 1.00, bloom: 0.56, stars: 0.06,
+    fog: 0xC08A6E, fogD: 0.00036, fogSun: 0xFFB870, fogSunStr: 1.20, fogGround: 2.6, dust: 0.70, exposure: 1.00, bloom: 0.56, stars: 0.06,
     sunGlow: 0.70, sunSize: 0.0155, discInt: 12, hazeCol: 0xFFB070, haze: 0.60,
     torch: 0.16, waterShallow: 0x55BF88, waterDeep: 0x1C5C41, reflTint: 0xFFC898,
     reflStr: 0.95, sparkle: 1.45, waterGlow: 0.012, goldEm: 0.85, envInt: 1.20,
@@ -1685,14 +1936,14 @@ const PRESETS = [
     skyTop: 0x040A1C, skyMid: 0x081436, skyHor: 0x11224C, skyGnd: 0x080E20,
     hemiSky: 0x27395F, hemiGnd: 0x0F1426, hemiInt: 0.50,
     fillCol: 0x3F5A9A, fillInt: 0.26, fillDir: new THREE.Vector3(-0.5, 0.4, -0.6),
-    fog: 0x0A1230, fogD: 0.00042, fogSun: 0x4C6AA8, fogSunStr: 0.55, fogGround: 2.4, exposure: 1.25, bloom: 0.95, stars: 1.0,
+    fog: 0x0A1230, fogD: 0.00042, fogSun: 0x4C6AA8, fogSunStr: 0.55, fogGround: 2.4, dust: 0.10, exposure: 1.25, bloom: 0.95, stars: 1.0,
     sunGlow: 0.35, sunSize: 0.019, discInt: 8, hazeCol: 0x1E2E52, haze: 0.22,
     torch: 1.0, waterShallow: 0x2E8B6E, waterDeep: 0x0E3A3C, reflTint: 0xB9CCFF,
     reflStr: 1.0, sparkle: 0.95, waterGlow: 0.026, goldEm: 1.20, envInt: 1.10,
   }),
 ];
 
-const NUMS = ['sunInt', 'hemiInt', 'fillInt', 'fogD', 'exposure', 'bloom', 'stars', 'fogSunStr', 'fogGround',
+const NUMS = ['sunInt', 'hemiInt', 'fillInt', 'fogD', 'exposure', 'bloom', 'stars', 'fogSunStr', 'fogGround', 'dust',
   'sunGlow', 'sunSize', 'discInt', 'haze', 'torch', 'reflStr', 'sparkle', 'waterGlow', 'goldEm', 'envInt'];
 const COLS = ['sunCol', 'skyTop', 'skyMid', 'skyHor', 'skyGnd', 'hemiSky', 'hemiGnd', 'fillCol', 'fog', 'fogSun', 'hazeCol',
   'waterShallow', 'waterDeep', 'reflTint'];
@@ -1962,6 +2213,14 @@ function setupComposer() {
     scale: 1.0, samples: 16, screenSpaceRadius: false,
   });
   gtaoPass.updatePdMaterial({ lumaPhi: 8, depthPhi: 3, normalPhi: 4, radius: 6, rings: 2, samples: 12 });
+  const gtaoRenderInner = gtaoPass.render.bind(gtaoPass);
+  gtaoPass.render = (r, w, rd, dt, mk) => {
+    const skip = [dustMesh, ...flameMeshes.map(f => f.mesh)].filter(Boolean);
+    const was = skip.map(o => o.visible);
+    skip.forEach(o => { o.visible = false; });
+    gtaoRenderInner(r, w, rd, dt, mk);
+    skip.forEach((o, i) => { o.visible = was[i]; });
+  };
   composer.addPass(gtaoPass);
 
   bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.56, 0.45, 1.06);
@@ -1979,6 +2238,7 @@ addEventListener('resize', () => {
   sizeReflection();
 });
 
+const _dustV = new THREE.Vector3();
 const clock = new THREE.Clock();
 let envTimer = 0, frameAvg = 16, adaptCooldown = 4;
 
@@ -2004,6 +2264,7 @@ function frame() {
 
   skyUniforms.uTime.value = t;
   waterUniforms.uTime.value = t;
+  WIND.uTime.value = t;
 
   // IBL refresh — cheap when static, throttled while the sun moves
   envTimer += dt;
@@ -2021,6 +2282,34 @@ function frame() {
     const fl = 0.55 + 0.45 * Math.sin(t * 9.1 + tl.ph) * Math.cos(t * 4.3 + tl.ph * 1.7);
     tl.l.intensity = 190 * torch * (0.7 + 0.5 * fl);
   }
+  // dust glows only when the sun rakes it, and always faces the lens
+  if (dustMesh) {
+    const toSun = live.sunDir.dot(camera.getWorldDirection(_dustV).negate());
+    const rake = clamp(0.30 + 0.70 * Math.max(toSun, 0), 0, 1);
+    dustMat.color.copy(live.sunCol).multiplyScalar(live.dust * rake);
+    dustMesh.visible = live.dust > 0.01;
+    dustMesh.quaternion.copy(camera.quaternion);
+  }
+
+  // flocks wheel over the marshes
+  {
+    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sv = new THREE.Vector3(), pv = new THREE.Vector3();
+    const up = new THREE.Vector3(0, 1, 0);
+    for (const fl of FLOCKS) {
+      for (let i = 0; i < fl.birds.length; i++) {
+        const b = fl.birds[i];
+        const a = b.ph + t * b.sp;
+        pv.set(fl.c.x + Math.cos(a) * b.r, fl.c.y + b.yo + Math.sin(a * 2.1) * 1.6, fl.c.z + Math.sin(a) * b.r);
+        q.setFromAxisAngle(up, -a + Math.PI / 2);
+        const flap = 1 + Math.sin(t * 7.5 + b.ph) * 0.35;
+        sv.set(b.sc, b.sc, b.sc * flap);
+        m4.compose(pv, q, sv);
+        fl.mesh.setMatrixAt(i, m4);
+      }
+      fl.mesh.instanceMatrix.needsUpdate = true;
+    }
+  }
+
   // boats ride the swell
   for (const b of BOATS) {
     b.m.position.y = b.y0 + Math.sin(t * 0.9 + b.ph) * 0.22;
@@ -2058,6 +2347,7 @@ const step = (label, pct) => new Promise(r => {
 
 async function boot() {
   await step('Surveying the plateau', 8);
+  layFields();
   bakeTerrain();
 
   await step('Tracing the sky horizon', 18);
@@ -2086,6 +2376,8 @@ async function boot() {
   await step('Planting the delta', 90);
   populateLife();
   buildFleet();
+  buildBirds();
+  buildDust();
   buildTorches();
 
   await step('Waking Ra', 98);
