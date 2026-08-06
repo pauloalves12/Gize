@@ -75,6 +75,7 @@ import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
 /* ==========================================================================
@@ -492,6 +493,123 @@ const matGold = new THREE.MeshStandardMaterial({
 const matVeg = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.78, metalness: 0.0, envMapIntensity: 0.7 });
 const matProp = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.70, metalness: 0.04, envMapIntensity: 0.8 });
 
+/* ---- atmosphere & surface detail -----------------------------------------
+   The stock exponential fog is height-invariant and ignores the sun, so the
+   valley never holds mist and the haze never glows. Overriding the fog chunks
+   globally upgrades every lit material at once: density rises toward the
+   ground, and looking into the sun warms the haze (forward scattering).
+   The same patch carries a world-space varying we reuse for micro-detail. */
+
+const ATMO = {
+  fogGroundY:      { value: 12.0 },
+  fogHeightFalloff:{ value: 0.085 },
+  fogGroundBoost:  { value: 2.6 },
+  fogSunDir:       { value: new THREE.Vector3(0, 1, 0) },
+  fogSunColor:     { value: C(0xFFC98A) },
+  fogSunStrength:  { value: 0.85 },
+};
+
+THREE.ShaderChunk.fog_pars_vertex = `
+#ifdef USE_FOG
+  varying float vFogDepth;
+  varying vec3 vFogWorld;
+#endif`;
+
+THREE.ShaderChunk.fog_vertex = `
+#ifdef USE_FOG
+  vFogDepth = - mvPosition.z;
+  vec4 fogWP = vec4( transformed, 1.0 );
+  #ifdef USE_INSTANCING
+    fogWP = instanceMatrix * fogWP;
+  #endif
+  vFogWorld = ( modelMatrix * fogWP ).xyz;
+#endif`;
+
+THREE.ShaderChunk.fog_pars_fragment = `
+#ifdef USE_FOG
+  uniform vec3 fogColor;
+  varying float vFogDepth;
+  varying vec3 vFogWorld;
+  #ifdef FOG_EXP2
+    uniform float fogDensity;
+  #else
+    uniform float fogNear;
+    uniform float fogFar;
+  #endif
+  uniform float fogGroundY, fogHeightFalloff, fogGroundBoost, fogSunStrength;
+  uniform vec3 fogSunDir, fogSunColor;
+#endif`;
+
+THREE.ShaderChunk.fog_fragment = `
+#ifdef USE_FOG
+  #ifdef FOG_EXP2
+    float hAbove = max( vFogWorld.y - fogGroundY, 0.0 );
+    float dens = fogDensity * mix( 1.0, fogGroundBoost, exp( - hAbove * fogHeightFalloff ) );
+    float fogFactor = 1.0 - exp( - dens * dens * vFogDepth * vFogDepth );
+  #else
+    float fogFactor = smoothstep( fogNear, fogFar, vFogDepth );
+  #endif
+  vec3 fogV = normalize( vFogWorld - cameraPosition );
+  float sunAmt = max( dot( fogV, fogSunDir ), 0.0 );
+  vec3 fogTinted = mix( fogColor, fogSunColor, pow( sunAmt, 5.0 ) * fogSunStrength );
+  gl_FragColor.rgb = mix( gl_FragColor.rgb, fogTinted, fogFactor );
+#endif`;
+
+// cheap sin-free 3D value noise for per-fragment surface variation
+const DETAIL_GLSL = `
+uniform float uDetScale, uDetNormal, uDetRough, uDetTint;
+float dnHash(vec3 p){
+  p = fract(p * 0.3183099 + vec3(0.11, 0.27, 0.43));
+  p *= 17.0;
+  return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+float dnNoise(vec3 p){
+  vec3 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(dnHash(i), dnHash(i + vec3(1,0,0)), f.x),
+                 mix(dnHash(i + vec3(0,1,0)), dnHash(i + vec3(1,1,0)), f.x), f.y),
+             mix(mix(dnHash(i + vec3(0,0,1)), dnHash(i + vec3(1,0,1)), f.x),
+                 mix(dnHash(i + vec3(0,1,1)), dnHash(i + vec3(1,1,1)), f.x), f.y), f.z);
+}`;
+
+/** every lit material gets the shared atmosphere uniforms; opt into grain */
+function patchMaterial(mat, detail) {
+  mat.userData.detail = detail || null;
+  const prev = mat.onBeforeCompile;
+  mat.onBeforeCompile = (sh, renderer) => {
+    if (prev) prev(sh, renderer);
+    Object.assign(sh.uniforms, ATMO);
+    const d = mat.userData.detail;
+    if (!d) return;
+    sh.uniforms.uDetScale = { value: d.scale };
+    sh.uniforms.uDetNormal = { value: d.normal };
+    sh.uniforms.uDetRough = { value: d.rough };
+    sh.uniforms.uDetTint = { value: d.tint };
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\n' + DETAIL_GLSL)
+      .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
+        {
+          vec3 dp = vFogWorld * uDetScale;
+          float na = dnNoise(dp);
+          vec3 pert = vec3(dnNoise(dp + vec3(1.7, 0.0, 0.0)) - na, 0.0,
+                           dnNoise(dp + vec3(0.0, 0.0, 1.7)) - na);
+          pert -= normal * dot(pert, normal);
+          normal = normalize(normal + pert * uDetNormal);
+          roughnessFactor = clamp(roughnessFactor + (na - 0.5) * uDetRough, 0.04, 1.0);
+          diffuseColor.rgb *= 1.0 + (na - 0.5) * uDetTint;
+        }`);
+  };
+  mat.needsUpdate = true;
+  return mat;
+}
+
+patchMaterial(matSand,   { scale: 0.42, normal: 0.20, rough: 0.16, tint: 0.17 });
+patchMaterial(matStone,  { scale: 0.85, normal: 0.11, rough: 0.13, tint: 0.12 });
+patchMaterial(matCasing, { scale: 1.30, normal: 0.06, rough: 0.10, tint: 0.055 });
+patchMaterial(matGold,   null);
+patchMaterial(matVeg,    null);
+patchMaterial(matProp,   { scale: 1.10, normal: 0.09, rough: 0.12, tint: 0.11 });
+
 const UNIT = new THREE.BoxGeometry(1, 1, 1);
 
 /** helper: build an InstancedMesh of unit cubes from a list of transforms */
@@ -527,6 +645,7 @@ const COL_GRASS = C(0x4E8F2C), COL_GRASS_DEEP = C(0x2F6B22), COL_GRASS_LIGHT = C
 const COL_BED = C(0x4A5230), COL_BED_DEEP = C(0x2E3A26);
 
 const tmpCol = new THREE.Color(), tmpCol2 = new THREE.Color();
+const SKY_AO_TINT = C(0x4A4668);
 
 function terrainColour(x, z, h, slope, out) {
   const mottle = fbm(x * 0.11, z * 0.11, 2) - 0.5;
@@ -561,6 +680,36 @@ function terrainColour(x, z, h, slope, out) {
   return out;
 }
 
+/* Horizon-based sky occlusion, baked per column at build time. Free at
+   runtime and it is what makes dune troughs, the quarry basin and the foot of
+   the escarpment sit in soft ambient shadow instead of reading uniformly lit. */
+const SKY_AO = new Float32Array(NX * NZ);
+const AO_DIRS = 12, AO_STEPS = [1, 2, 3, 5, 8, 12, 18, 26];
+function bakeSkyOcclusion() {
+  const cos = [], sin = [];
+  for (let d = 0; d < AO_DIRS; d++) {
+    const a = (d / AO_DIRS) * Math.PI * 2;
+    cos.push(Math.cos(a)); sin.push(Math.sin(a));
+  }
+  for (let iz = 0; iz < NZ; iz++) {
+    for (let ix = 0; ix < NX; ix++) {
+      const h0 = HEIGHTS[gi(ix, iz)];
+      let occl = 0;
+      for (let d = 0; d < AO_DIRS; d++) {
+        let maxTan = 0;
+        for (const st of AO_STEPS) {
+          const jx = ix + Math.round(cos[d] * st), jz = iz + Math.round(sin[d] * st);
+          if (jx < 0 || jx >= NX || jz < 0 || jz >= NZ) continue;
+          const t = (HEIGHTS[gi(jx, jz)] - h0) / (st * V);
+          if (t > maxTan) maxTan = t;
+        }
+        occl += maxTan / (1 + maxTan);          // horizon angle -> lost sky
+      }
+      SKY_AO[gi(ix, iz)] = Math.pow(1 - (occl / AO_DIRS), 1.35);
+    }
+  }
+}
+
 let terrainMesh = null;
 function buildTerrain() {
   const n = NX * NZ;
@@ -578,7 +727,12 @@ function buildTerrain() {
       m4.makeScale(V, sy, V);
       m4.setPosition(x, FLOOR_Y + sy * 0.5, z);
       mesh.setMatrixAt(i, m4);
-      mesh.setColorAt(i, terrainColour(x, z, h, slope, tmpCol));
+      terrainColour(x, z, h, slope, tmpCol);
+      // sky occlusion darkens and slightly cools the ambient-starved hollows
+      const ao = SKY_AO[i];
+      tmpCol.multiplyScalar(0.30 + 0.70 * ao);
+      tmpCol.lerp(SKY_AO_TINT, (1 - ao) * 0.30);
+      mesh.setColorAt(i, tmpCol);
     }
   }
   mesh.instanceMatrix.needsUpdate = true;
@@ -634,7 +788,7 @@ function makeWaterMaterial() {
     transparent: true, depthWrite: true, side: THREE.FrontSide, dithering: true,
   });
   m.onBeforeCompile = (sh) => {
-    Object.assign(sh.uniforms, waterUniforms);
+    Object.assign(sh.uniforms, waterUniforms, ATMO);
 
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
@@ -1495,7 +1649,7 @@ const PRESETS = [
     skyTop: 0x122F62, skyMid: 0xA5719C, skyHor: 0xF6A472, skyGnd: 0x6B4A38,
     hemiSky: 0x7EA0D6, hemiGnd: 0x5A4A6A, hemiInt: 0.88,
     fillCol: 0x6D86C8, fillInt: 0.55, fillDir: new THREE.Vector3(-0.7, 0.5, 0.4),
-    fog: 0xC49B90, fogD: 0.00040, exposure: 1.00, bloom: 0.48, stars: 0.18,
+    fog: 0xC49B90, fogD: 0.00044, fogSun: 0xFFD2A8, fogSunStr: 1.10, fogGround: 3.4, exposure: 1.00, bloom: 0.48, stars: 0.18,
     sunGlow: 0.75, sunSize: 0.0145, discInt: 12, hazeCol: 0xFFC9A6, haze: 0.62,
     torch: 0.20, waterShallow: 0x6BC3A0, waterDeep: 0x225E52, reflTint: 0xFFD8C0,
     reflStr: 0.92, sparkle: 1.15, waterGlow: 0.008, goldEm: 0.60, envInt: 1.15,
@@ -1507,7 +1661,7 @@ const PRESETS = [
     skyTop: 0x1655BE, skyMid: 0x5AA6F0, skyHor: 0xBADCFF, skyGnd: 0xA98F62,
     hemiSky: 0xA6D2FF, hemiGnd: 0xD2AE6C, hemiInt: 1.10,
     fillCol: 0xBFD8FF, fillInt: 0.80, fillDir: new THREE.Vector3(-0.5, 0.35, -0.6),
-    fog: 0xB6D2EE, fogD: 0.00026, exposure: 0.97, bloom: 0.40, stars: 0,
+    fog: 0xB6D2EE, fogD: 0.00026, fogSun: 0xFFF4E2, fogSunStr: 0.35, fogGround: 1.3, exposure: 0.97, bloom: 0.40, stars: 0,
     sunGlow: 0.45, sunSize: 0.011, discInt: 16, hazeCol: 0xDCECFF, haze: 0.28,
     torch: 0, waterShallow: 0x50CE8C, waterDeep: 0x1B6B47, reflTint: 0xFFFFFF,
     reflStr: 0.80, sparkle: 1.6, waterGlow: 0.0, goldEm: 0.30, envInt: 1.55,
@@ -1519,7 +1673,7 @@ const PRESETS = [
     skyTop: 0x13265C, skyMid: 0xC96A6E, skyHor: 0xFF8C3A, skyGnd: 0x7A4A28,
     hemiSky: 0x5C6ACB, hemiGnd: 0x8A5A48, hemiInt: 0.58,
     fillCol: 0x7A82E0, fillInt: 0.55, fillDir: new THREE.Vector3(0.62, 0.45, 0.60),
-    fog: 0xC08A6E, fogD: 0.00034, exposure: 1.00, bloom: 0.56, stars: 0.06,
+    fog: 0xC08A6E, fogD: 0.00036, fogSun: 0xFFB870, fogSunStr: 1.20, fogGround: 2.6, exposure: 1.00, bloom: 0.56, stars: 0.06,
     sunGlow: 0.70, sunSize: 0.0155, discInt: 12, hazeCol: 0xFFB070, haze: 0.60,
     torch: 0.16, waterShallow: 0x55BF88, waterDeep: 0x1C5C41, reflTint: 0xFFC898,
     reflStr: 0.95, sparkle: 1.45, waterGlow: 0.012, goldEm: 0.85, envInt: 1.20,
@@ -1531,16 +1685,16 @@ const PRESETS = [
     skyTop: 0x040A1C, skyMid: 0x081436, skyHor: 0x11224C, skyGnd: 0x080E20,
     hemiSky: 0x27395F, hemiGnd: 0x0F1426, hemiInt: 0.50,
     fillCol: 0x3F5A9A, fillInt: 0.26, fillDir: new THREE.Vector3(-0.5, 0.4, -0.6),
-    fog: 0x0A1230, fogD: 0.00040, exposure: 1.25, bloom: 0.95, stars: 1.0,
+    fog: 0x0A1230, fogD: 0.00042, fogSun: 0x4C6AA8, fogSunStr: 0.55, fogGround: 2.4, exposure: 1.25, bloom: 0.95, stars: 1.0,
     sunGlow: 0.35, sunSize: 0.019, discInt: 8, hazeCol: 0x1E2E52, haze: 0.22,
     torch: 1.0, waterShallow: 0x2E8B6E, waterDeep: 0x0E3A3C, reflTint: 0xB9CCFF,
     reflStr: 1.0, sparkle: 0.95, waterGlow: 0.026, goldEm: 1.20, envInt: 1.10,
   }),
 ];
 
-const NUMS = ['sunInt', 'hemiInt', 'fillInt', 'fogD', 'exposure', 'bloom', 'stars',
+const NUMS = ['sunInt', 'hemiInt', 'fillInt', 'fogD', 'exposure', 'bloom', 'stars', 'fogSunStr', 'fogGround',
   'sunGlow', 'sunSize', 'discInt', 'haze', 'torch', 'reflStr', 'sparkle', 'waterGlow', 'goldEm', 'envInt'];
-const COLS = ['sunCol', 'skyTop', 'skyMid', 'skyHor', 'skyGnd', 'hemiSky', 'hemiGnd', 'fillCol', 'fog', 'hazeCol',
+const COLS = ['sunCol', 'skyTop', 'skyMid', 'skyHor', 'skyGnd', 'hemiSky', 'hemiGnd', 'fillCol', 'fog', 'fogSun', 'hazeCol',
   'waterShallow', 'waterDeep', 'reflTint'];
 
 // the interpolated "now" of the Ra system — one slot per blended parameter
@@ -1580,6 +1734,10 @@ function applyLighting(t) {
 
   scene.fog.color.copy(live.fog);
   scene.fog.density = live.fogD;
+  ATMO.fogSunDir.value.copy(live.sunDir);
+  ATMO.fogSunColor.value.copy(live.fogSun);
+  ATMO.fogSunStrength.value = live.fogSunStr;
+  ATMO.fogGroundBoost.value = live.fogGround;
   renderer.toneMappingExposure = live.exposure;
   if (bloomPass) bloomPass.strength = live.bloom;
 
@@ -1784,10 +1942,28 @@ btnTour.addEventListener('click', toggleTour);
    13.  POST + LOOP
    ========================================================================== */
 
-let composer = null, bloomPass = null;
+let composer = null, bloomPass = null, gtaoPass = null;
 function setupComposer() {
-  composer = new EffectComposer(renderer);
+  // the composer's own target has to carry the MSAA — the renderer's
+  // antialias flag only applies to the default framebuffer
+  const rt = new THREE.WebGLRenderTarget(innerWidth, innerHeight, {
+    type: THREE.HalfFloatType, samples: 4,
+  });
+  composer = new EffectComposer(renderer, rt);
   composer.addPass(new RenderPass(scene, camera));
+
+  // screen-space contact occlusion: the crevices between masonry courses,
+  // terrace risers and temple setbacks that a shadow map cannot resolve
+  gtaoPass = new GTAOPass(scene, camera, innerWidth, innerHeight);
+  gtaoPass.output = GTAOPass.OUTPUT.Default;
+  gtaoPass.blendIntensity = 0.85;
+  gtaoPass.updateGtaoMaterial({
+    radius: 3.2, distanceExponent: 1.4, thickness: 2.5,
+    scale: 1.0, samples: 16, screenSpaceRadius: false,
+  });
+  gtaoPass.updatePdMaterial({ lumaPhi: 8, depthPhi: 3, normalPhi: 4, radius: 6, rings: 2, samples: 12 });
+  composer.addPass(gtaoPass);
+
   bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.56, 0.45, 1.06);
   composer.addPass(bloomPass);
   composer.addPass(new OutputPass());
@@ -1799,6 +1975,7 @@ addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
   if (composer) composer.setSize(innerWidth, innerHeight);
   if (bloomPass) bloomPass.setSize(innerWidth, innerHeight);
+  if (gtaoPass) gtaoPass.setSize(innerWidth, innerHeight);
   sizeReflection();
 });
 
@@ -1859,8 +2036,11 @@ function frame() {
   // light adaptive guard on the reflection pass
   frameAvg = frameAvg * 0.94 + dt * 1000 * 0.06;
   adaptCooldown -= dt;
-  if (adaptCooldown <= 0 && frameAvg > 30 && reflLevel < REFL_SCALE_LEVELS.length - 1) {
-    reflLevel++; sizeReflection(); applyLighting(presetT); adaptCooldown = 8; frameAvg = 16;
+  if (adaptCooldown <= 0 && frameAvg > 30) {
+    if (gtaoPass && gtaoPass.enabled) { gtaoPass.enabled = false; adaptCooldown = 8; frameAvg = 16; }
+    else if (reflLevel < REFL_SCALE_LEVELS.length - 1) {
+      reflLevel++; sizeReflection(); applyLighting(presetT); adaptCooldown = 8; frameAvg = 16;
+    }
   }
 }
 
@@ -1879,6 +2059,9 @@ const step = (label, pct) => new Promise(r => {
 async function boot() {
   await step('Surveying the plateau', 8);
   bakeTerrain();
+
+  await step('Tracing the sky horizon', 18);
+  bakeSkyOcclusion();
 
   await step('Laying the sand', 24);
   buildTerrain();
