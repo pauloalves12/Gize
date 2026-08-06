@@ -142,10 +142,18 @@ Scaled to 0.42–0.76.
 Both sides rendered through the same frozen quality path, baseline checked out
 from `f5b446d`.
 
-| | mean | contrast | local detail |
+| Golden Hour | mean | contrast | local detail |
 |---|---|---|---|
 | baseline `f5b446d` | 117.0 | 57.0 | 5.02 |
 | optimised | 118.2 | 55.1 | 4.57 |
+
+| High Noon | mean | contrast |
+|---|---|---|
+| baseline `f5b446d` | 169.7 | 38.0 |
+| optimised | 168.0 | **39.1** |
+
+High Noon is the useful numeric case: a high sun leaves little edge crawl for
+MSAA to remove, so the contrast figure is not confounded there and it rises.
 
 Read those two right-hand columns with the caveat above: both drop because MSAA
 removed edge crawl. What the side-by-side actually shows:
