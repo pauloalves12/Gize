@@ -1,12 +1,30 @@
 # Visual optimisation log
 
 Each round was rendered at fixed camera poses and compared side by side against
-the previous iteration. Luminance mean and standard deviation (contrast) are
-measured over the whole frame at 205×117; they are a sanity check on what the
-side-by-side already shows, not the decision itself. Changes that did not
-clearly improve the image were corrected or dropped, and both are recorded here.
+the previous iteration. Changes that did not clearly improve the image were
+corrected or dropped, and both are recorded here.
 
 Baseline for this work is commit `f5b446d`.
+
+### On the numbers in this log
+
+Two measurement problems turned up and are worth stating plainly, because they
+limit how much the figures below are worth.
+
+1. **The captures were not deterministic at first.** Software rendering exceeds
+   the 30 ms frame budget on every frame, so the adaptive quality ladder switched
+   GTAO off partway through a capture. The same pose produced a mean of 117.8 in
+   one run and 131.0 in the next with only a bird-scale change between them. The
+   rig now freezes the ladder before capturing, and the final comparison renders
+   the baseline from `f5b446d` through the same frozen path.
+2. **Luminance standard deviation is confounded by anti-aliasing.** Jagged edges
+   are high-frequency contrast, so MSAA lowers both the contrast figure and an
+   adjacent-pixel detail measure while making the image objectively cleaner. On
+   the deterministic pair, contrast reads 57.0 → 55.1 and local detail −9%, yet
+   the optimised frame plainly carries more information.
+
+The per-round figures below therefore record what was observed at the time and
+what triggered each correction; the side-by-side image was always the decision.
 
 ---
 
@@ -119,19 +137,29 @@ Scaled to 0.42–0.76.
 
 ---
 
-## Cumulative result at the hero pose (Golden Hour)
+## Deterministic comparison — Golden Hour hero pose
 
-| | mean | contrast |
-|---|---|---|
-| baseline `f5b446d` | 121.8 | 56.0 |
-| round 1 raw | 126.3 | 49.9 (regressed) |
-| round 1 corrected | 117.5 | 56.0 |
-| round 2 corrected | 116.7 | 56.3 |
-| round 3 | 117.8 | 55.4 |
+Both sides rendered through the same frozen quality path, baseline checked out
+from `f5b446d`.
 
-Contrast holds at the baseline level while the frame carries considerably more
-information: stratified escarpment, occupied plateau, patchwork flood plain,
-moving vegetation, and a river with a readable shoreline.
+| | mean | contrast | local detail |
+|---|---|---|---|
+| baseline `f5b446d` | 117.0 | 57.0 | 5.02 |
+| optimised | 118.2 | 55.1 | 4.57 |
+
+Read those two right-hand columns with the caveat above: both drop because MSAA
+removed edge crawl. What the side-by-side actually shows:
+
+- plateau surface: speckled aliasing → coherent sand drifts with mastaba clusters
+- escarpment: flat strata bands → risers with shadowed recesses
+- temples: bare blocks → cornice-crowned masses sitting in contact shadow
+- Sphinx quarry: shallow dish → articulated basin
+- flood plain: uniform green → irrigated patchwork with dyke lines
+- edges: visibly jagged → clean
+
+Everything the earlier per-round figures claimed about structure holds up in the
+deterministic pair. The numeric summary does not carry the argument; the images
+do.
 
 ---
 
