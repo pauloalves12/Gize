@@ -558,7 +558,8 @@ const ATMO = {
   fogSunDir:       { value: new THREE.Vector3(0, 1, 0) },
   fogSunColor:     { value: C(0xFFC98A) },
   fogSunStrength:  { value: 0.85 },
-  aerial:          { value: 0.0018 },
+  aerial:          { value: 0.0011 },
+  aerialNear:      { value: 330.0 },
 };
 
 THREE.ShaderChunk.fog_pars_vertex = `
@@ -588,7 +589,7 @@ THREE.ShaderChunk.fog_pars_fragment = `
     uniform float fogNear;
     uniform float fogFar;
   #endif
-  uniform float fogGroundY, fogHeightFalloff, fogGroundBoost, fogSunStrength, aerial;
+  uniform float fogGroundY, fogHeightFalloff, fogGroundBoost, fogSunStrength, aerial, aerialNear;
   uniform vec3 fogSunDir, fogSunColor;
 #endif`;
 
@@ -601,12 +602,11 @@ THREE.ShaderChunk.fog_fragment = `
   #else
     float fogFactor = smoothstep( fogNear, fogFar, vFogDepth );
   #endif
-  // aerial perspective: distance bleeds saturation and local contrast out of a
-  // surface long before the fog itself becomes obvious
-  float aer = clamp( vFogDepth * aerial, 0.0, 0.80 );
+  // aerial perspective: saturation bleeds out of the FAR field only. It starts
+  // beyond the monuments and never lifts blacks, so silhouettes stay intact.
+  float aer = clamp( ( vFogDepth - aerialNear ) * aerial, 0.0, 0.55 );
   float aLum = dot( gl_FragColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) );
-  gl_FragColor.rgb = mix( gl_FragColor.rgb, vec3( aLum ), aer * 0.58 );
-  gl_FragColor.rgb = mix( gl_FragColor.rgb, vec3( aLum * 0.5 + 0.28 ), aer * 0.16 );
+  gl_FragColor.rgb = mix( gl_FragColor.rgb, vec3( aLum ), aer * 0.42 );
   vec3 fogV = normalize( vFogWorld - cameraPosition );
   float sunAmt = max( dot( fogV, fogSunDir ), 0.0 );
   vec3 fogTinted = mix( fogColor, fogSunColor, pow( sunAmt, 5.0 ) * fogSunStrength );
@@ -630,13 +630,31 @@ float dnNoise(vec3 p){
                  mix(dnHash(i + vec3(0,1,1)), dnHash(i + vec3(1,1,1)), f.x), f.y), f.z);
 }`;
 
+const RIM = { uRimStr: { value: 0.0 }, uRimCol: { value: C(0xFFD9A0) } };
+
 /** every lit material gets the shared atmosphere uniforms; opt into grain */
-function patchMaterial(mat, detail) {
+function patchMaterial(mat, detail, rim) {
   mat.userData.detail = detail || null;
+  mat.userData.rim = !!rim;
   const prev = mat.onBeforeCompile;
   mat.onBeforeCompile = (sh, renderer) => {
     if (prev) prev(sh, renderer);
     Object.assign(sh.uniforms, ATMO);
+    if (mat.userData.rim) {
+      Object.assign(sh.uniforms, RIM);
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', '#include <common>\nuniform float uRimStr;\nuniform vec3 uRimCol;')
+        .replace('#include <dithering_fragment>', `#include <dithering_fragment>
+          {
+            // view-space normal back to world: for an orthonormal view matrix a
+            // row-vector multiply is the inverse rotation
+            vec3 Nw = normalize((vec4(normal, 0.0) * viewMatrix).xyz);
+            vec3 Vw = normalize(cameraPosition - vFogWorld);
+            float rim = pow(1.0 - clamp(dot(Nw, Vw), 0.0, 1.0), 3.2);
+            float sunFace = smoothstep(-0.20, 0.62, dot(Nw, fogSunDir));
+            gl_FragColor.rgb += uRimCol * rim * sunFace * uRimStr;
+          }`);
+    }
     const d = mat.userData.detail;
     if (!d) return;
     sh.uniforms.uDetScale = { value: d.scale };
@@ -662,8 +680,8 @@ function patchMaterial(mat, detail) {
 }
 
 patchMaterial(matSand,   { scale: 0.42, normal: 0.20, rough: 0.16, tint: 0.17 });
-patchMaterial(matStone,  { scale: 0.85, normal: 0.11, rough: 0.13, tint: 0.12 });
-patchMaterial(matCasing, { scale: 1.30, normal: 0.06, rough: 0.10, tint: 0.055 });
+patchMaterial(matStone,  { scale: 0.85, normal: 0.11, rough: 0.13, tint: 0.12 }, true);
+patchMaterial(matCasing, { scale: 1.30, normal: 0.06, rough: 0.10, tint: 0.055 }, true);
 patchMaterial(matGold,   null);
 patchMaterial(matVeg,    null);
 patchMaterial(matProp,   { scale: 1.10, normal: 0.09, rough: 0.12, tint: 0.11 });
@@ -2011,7 +2029,7 @@ const PRESETS = [
     skyTop: 0x122F62, skyMid: 0xA5719C, skyHor: 0xF6A472, skyGnd: 0x6B4A38,
     hemiSky: 0x7EA0D6, hemiGnd: 0x5A4A6A, hemiInt: 0.88,
     fillCol: 0x6D86C8, fillInt: 0.55, fillDir: new THREE.Vector3(-0.7, 0.5, 0.4),
-    fog: 0xC49B90, fogD: 0.00044, fogSun: 0xFFD2A8, fogSunStr: 1.10, fogGround: 3.4, dust: 0.30, aerial: 0.00230, exposure: 1.00, bloom: 0.48, stars: 0.18,
+    fog: 0xC49B90, fogD: 0.00044, fogSun: 0xFFD2A8, fogSunStr: 1.10, fogGround: 3.4, dust: 0.30, aerial: 0.00115, rim: 0.30, rimCol: 0xFFC79A, exposure: 1.00, bloom: 0.48, stars: 0.18,
     sunGlow: 0.75, sunSize: 0.0145, discInt: 12, hazeCol: 0xFFC9A6, haze: 0.62,
     torch: 0.20, waterShallow: 0x6BC3A0, waterDeep: 0x225E52, reflTint: 0xFFD8C0,
     reflStr: 0.92, sparkle: 1.15, waterGlow: 0.008, goldEm: 0.60, envInt: 1.15,
@@ -2023,7 +2041,7 @@ const PRESETS = [
     skyTop: 0x1655BE, skyMid: 0x5AA6F0, skyHor: 0xBADCFF, skyGnd: 0xA98F62,
     hemiSky: 0xA6D2FF, hemiGnd: 0xD2AE6C, hemiInt: 1.10,
     fillCol: 0xBFD8FF, fillInt: 0.80, fillDir: new THREE.Vector3(-0.5, 0.35, -0.6),
-    fog: 0xB6D2EE, fogD: 0.00026, fogSun: 0xFFF4E2, fogSunStr: 0.35, fogGround: 1.3, dust: 0.09, aerial: 0.00135, exposure: 0.97, bloom: 0.40, stars: 0,
+    fog: 0xB6D2EE, fogD: 0.00026, fogSun: 0xFFF4E2, fogSunStr: 0.35, fogGround: 1.3, dust: 0.09, aerial: 0.00080, rim: 0.12, rimCol: 0xFFF2DC, exposure: 0.97, bloom: 0.40, stars: 0,
     sunGlow: 0.45, sunSize: 0.011, discInt: 16, hazeCol: 0xDCECFF, haze: 0.28,
     torch: 0, waterShallow: 0x50CE8C, waterDeep: 0x1B6B47, reflTint: 0xFFFFFF,
     reflStr: 0.80, sparkle: 1.6, waterGlow: 0.0, goldEm: 0.30, envInt: 1.55,
@@ -2035,7 +2053,7 @@ const PRESETS = [
     skyTop: 0x13265C, skyMid: 0xC96A6E, skyHor: 0xFF8C3A, skyGnd: 0x7A4A28,
     hemiSky: 0x5C6ACB, hemiGnd: 0x8A5A48, hemiInt: 0.58,
     fillCol: 0x7A82E0, fillInt: 0.55, fillDir: new THREE.Vector3(0.62, 0.45, 0.60),
-    fog: 0xC08A6E, fogD: 0.00036, fogSun: 0xFFB870, fogSunStr: 1.20, fogGround: 2.6, dust: 0.36, aerial: 0.00205, exposure: 1.00, bloom: 0.56, stars: 0.06,
+    fog: 0xC08A6E, fogD: 0.00036, fogSun: 0xFFB870, fogSunStr: 1.20, fogGround: 2.6, dust: 0.36, aerial: 0.00105, rim: 0.46, rimCol: 0xFFC078, exposure: 1.00, bloom: 0.56, stars: 0.06,
     sunGlow: 0.70, sunSize: 0.0155, discInt: 12, hazeCol: 0xFFB070, haze: 0.60,
     torch: 0.16, waterShallow: 0x55BF88, waterDeep: 0x1C5C41, reflTint: 0xFFC898,
     reflStr: 0.95, sparkle: 1.45, waterGlow: 0.012, goldEm: 0.85, envInt: 1.20,
@@ -2047,16 +2065,16 @@ const PRESETS = [
     skyTop: 0x040A1C, skyMid: 0x081436, skyHor: 0x11224C, skyGnd: 0x080E20,
     hemiSky: 0x27395F, hemiGnd: 0x0F1426, hemiInt: 0.50,
     fillCol: 0x3F5A9A, fillInt: 0.26, fillDir: new THREE.Vector3(-0.5, 0.4, -0.6),
-    fog: 0x0A1230, fogD: 0.00042, fogSun: 0x4C6AA8, fogSunStr: 0.55, fogGround: 2.4, dust: 0.07, aerial: 0.00110, exposure: 1.25, bloom: 0.95, stars: 1.0,
+    fog: 0x0A1230, fogD: 0.00042, fogSun: 0x4C6AA8, fogSunStr: 0.55, fogGround: 2.4, dust: 0.07, aerial: 0.00060, rim: 0.16, rimCol: 0xA8C4FF, exposure: 1.25, bloom: 0.95, stars: 1.0,
     sunGlow: 0.35, sunSize: 0.019, discInt: 8, hazeCol: 0x1E2E52, haze: 0.22,
     torch: 1.0, waterShallow: 0x2E8B6E, waterDeep: 0x0E3A3C, reflTint: 0xB9CCFF,
     reflStr: 1.0, sparkle: 0.95, waterGlow: 0.026, goldEm: 1.20, envInt: 1.10,
   }),
 ];
 
-const NUMS = ['sunInt', 'hemiInt', 'fillInt', 'fogD', 'exposure', 'bloom', 'stars', 'fogSunStr', 'fogGround', 'dust', 'aerial',
+const NUMS = ['sunInt', 'hemiInt', 'fillInt', 'fogD', 'exposure', 'bloom', 'stars', 'fogSunStr', 'fogGround', 'dust', 'aerial', 'rim',
   'sunGlow', 'sunSize', 'discInt', 'haze', 'torch', 'reflStr', 'sparkle', 'waterGlow', 'goldEm', 'envInt'];
-const COLS = ['sunCol', 'skyTop', 'skyMid', 'skyHor', 'skyGnd', 'hemiSky', 'hemiGnd', 'fillCol', 'fog', 'fogSun', 'hazeCol',
+const COLS = ['sunCol', 'skyTop', 'skyMid', 'skyHor', 'skyGnd', 'hemiSky', 'hemiGnd', 'fillCol', 'fog', 'fogSun', 'rimCol', 'hazeCol',
   'waterShallow', 'waterDeep', 'reflTint'];
 
 // the interpolated "now" of the Ra system — one slot per blended parameter
@@ -2101,6 +2119,8 @@ function applyLighting(t) {
   ATMO.fogSunStrength.value = live.fogSunStr;
   ATMO.fogGroundBoost.value = live.fogGround;
   ATMO.aerial.value = live.aerial;
+  RIM.uRimStr.value = live.rim;
+  RIM.uRimCol.value.copy(live.rimCol);
   renderer.toneMappingExposure = live.exposure;
   if (bloomPass) bloomPass.strength = live.bloom;
 
