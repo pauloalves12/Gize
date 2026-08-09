@@ -633,10 +633,15 @@ float dnNoise(vec3 p){
 const RIM = { uRimStr: { value: 0.0 }, uRimCol: { value: C(0xFFD9A0) } };
 
 /** every lit material gets the shared atmosphere uniforms; opt into grain */
+let _patchSeq = 0;
 function patchMaterial(mat, detail, rim, masonry) {
   mat.userData.detail = detail || null;
   mat.userData.rim = !!rim;
   mat.userData.masonry = masonry || null;
+  // Without this, three reuses one cached program across materials whose
+  // parameters match, and only the first material's injections survive.
+  const key = `giza${++_patchSeq}|${detail ? 1 : 0}${rim ? 1 : 0}${masonry ? 1 : 0}`;
+  mat.customProgramCacheKey = () => key;
   const prev = mat.onBeforeCompile;
   mat.onBeforeCompile = (sh, renderer) => {
     if (prev) prev(sh, renderer);
