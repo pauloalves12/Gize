@@ -1882,13 +1882,13 @@ function buildDust() {
   });
   dustMat.onBeforeCompile = (sh) => {
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>
-varying vec2 vDustUv;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>
-  vDustUv = uv;');
+      .replace('#include <common>', `#include <common>
+        varying vec2 vDustUv;`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        vDustUv = uv;`);
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>
-varying vec2 vDustUv;')
+      .replace('#include <common>', `#include <common>
+        varying vec2 vDustUv;`)
       .replace('#include <dithering_fragment>', `#include <dithering_fragment>
         float dr = length(vDustUv - 0.5) * 2.0;
         gl_FragColor.rgb *= pow(clamp(1.0 - dr, 0.0, 1.0), 1.8);`);
