@@ -252,11 +252,25 @@ function rawHeight(x, z) {
                         + 1.1 * (fbm(x * 0.13, z * 0.13, 2) - 0.5);
   let h = mix(dune, plat, sstep(-268, -214, x));
 
-  // escarpment down to the flood plain
+  // escarpment down to the flood plain. The cliff line meanders in z and its
+  // steepness changes bay by bay. With the old dead-straight ramp every column
+  // in a row stepped down at exactly the same x, so the entire plateau front
+  // read as one continuous layer cake — the single worst artefact in the scene.
+  const emx = 7.0 * (fbm(z * 0.0068 + 4.4, 55.0, 3) - 0.5) * 2
+            + 2.6 * (fbm(z * 0.0225 + 19.0, 71.0, 2) - 0.5) * 2;
+  const ecx = 65 + emx;                                   // cliff mid-line
+  const ehw = 13.5 + 13.5 * fbm(z * 0.0105 + 31, 88.0, 2);  // half-width: cut face .. talus ramp
   const valley = VALLEY_Y - 2.2 * sstep(84, 132, x) + 1.9 * (fbm(x * 0.03 + 3, z * 0.03 + 9, 3) - 0.5);
-  const e = s5step(42, 88, x);
+  const e = s5step(ecx - ehw, ecx + ehw, x);
   h = mix(h, valley, e);
   h += (1 - Math.abs(2 * e - 1)) * 3.4 * (fbm(x * 0.045 + 21, z * 0.045, 3) - 0.5);   // rocky terraces
+
+  // scree apron: the debris fan where the cut meets the plain, thickest below
+  // the steepest bays, so the cliff does not end on a clean drawn line
+  const efoot = ecx + ehw;
+  const tal = sstep(efoot + 32, efoot + 5, x) * sstep(efoot - 15, efoot + 2, x);
+  h += tal * (1.2 + 5.4 * Math.pow(fbm(x * 0.075 + 7, z * 0.075 + 43, 3), 1.7))
+           * (1.55 - 0.032 * ehw);
 
   // eastern desert beyond the far bank
   h = mix(h, duneHeight(x + 900, z), sstep(246, 316, x));
@@ -265,6 +279,13 @@ function rawHeight(x, z) {
   // drawing clean contour lines across the gentle slopes
   h += 1.55 * (fbm(x * 0.33 + 61, z * 0.33 + 17, 2) - 0.5);
   h += 2.60 * (fbm(x * 0.085 + 5, z * 0.085 + 91, 2) - 0.5);
+
+  // mega-ripples on the open sand: one prevailing wind direction, phase-warped
+  // so it never repeats, amplitude a little over one snap step so it survives
+  // quantisation and reads as combed sand rather than as noise
+  const rip = Math.sin(x * 0.196 + z * 0.118 + 5.4 * fbm(x * 0.011 + 71, z * 0.011 + 23, 2))
+            * (0.72 + 0.28 * Math.sin(x * 0.031 - z * 0.048 + 2.1));
+  h += rip * 0.92 * (sstep(-196, -250, x) + sstep(214, 246, x));
 
   // Nile channel
   const cx = riverCx(z), w = riverW(z);
@@ -843,6 +864,14 @@ function terrainColour(x, z, h, slope, out) {
   } else {                                                    // escarpment
     out.copy(COL_ROCK_DARK).lerp(COL_ROCK, clamp(0.45 + mottle * 1.5, 0, 1));
     out.lerp(COL_SILT_DARK, slope * 0.55);
+    // limestone bedding: bands of deliberately uneven thickness. Regular steps
+    // read as a quantisation artefact; uneven ones read as geology.
+    const bIdx = Math.floor(h * 0.185 + 2.4 * vnoise(h * 0.065, 13.0));
+    const bTone = vnoise(bIdx * 3.1 + 0.5, 41.0);
+    out.multiplyScalar(0.87 + 0.26 * bTone);
+    out.lerp(COL_GRAVEL, sstep(0.60, 0.96, bTone) * 0.30);
+    // near-vertical columns are freshly quarried faces: paler and drier
+    out.lerp(COL_ROCK, sstep(0.55, 0.95, slope) * 0.35);
   }
 
   // serir: wind-swept gravel plains where the sand has blown off entirely
@@ -1321,6 +1350,26 @@ function buildTemple(t, opts = {}) {
   cavettoCornice(x1 - wall + pt, z0 + pt, x1 - pt, zm - gate / 2 - pt, y + pylonH);
   cavettoCornice(x1 - wall + pt, zm + gate / 2 + pt, x1 - pt, z1 - pt, y + pylonH);
 
+  // The gateway used to be a bare gap between two blocks. A lintel, a recessed
+  // door reveal, jambs and a bright torus roll on each outer pylon corner are
+  // what make it read as a portal — and the corner rolls give the mass an edge.
+  const gh = pylonH * 0.56;
+  pushBox(stoneList, x1 - wall - 0.7, y + gh * 0.5, zm, 1.4, gh, gate - 0.3, LIME_D);   // dark reveal
+  pushBox(stoneList, x1 - wall / 2, y + gh + 0.80, zm, wall * 1.08, 1.6, gate + 0.5, LIME_W);  // lintel
+  cavettoCornice(x1 - wall + pt * 0.3, zm - gate / 2 - 0.2, x1 - pt * 0.3, zm + gate / 2 + 0.2,
+                 y + gh + 1.6, LIME_W, 0.55);   // sized to stay clear of the pylon tops
+  pushBox(goldList, x1 - wall / 2 + 0.12, y + gh + 0.80, zm, wall * 1.12, 0.62, gate * 0.58, 0xFFD700);
+  for (const sgn of [-1, 1]) {
+    pushBox(stoneList, x1 - wall / 2, y + gh * 0.5, zm + sgn * (gate / 2 + 0.45),
+            wall * 1.05, gh, 0.9, LIME_W);                                             // door jamb
+    const oz = sgn < 0 ? z0 : z1;
+    for (let k = 0; k < 7; k++) {
+      const f = (k + 0.5) / 7, ins = pt * f;                                           // follow the batter
+      pushBox(stoneList, x1 - ins + 0.10, y + pylonH * f, oz - sgn * (0.34 + ins),
+              0.58, pylonH / 7 * 1.04, 0.92, LIME_W);                                  // torus roll
+    }
+  }
+
   // entrance ramp + flanking obelisks
   for (let i = 0; i < 6; i++)
     pushBox(stoneList, x1 + 0.8 + i * 1.4, y - i * 0.42 + 0.2, zm, 1.4, 1.2 + i * 0.84, gate + 1.6, LIME_D);
@@ -1450,23 +1499,24 @@ function buildMastabas() {
 /* ---- 7h-ter. the western escarpment on the far horizon ------------------
    Purely a depth-layering device: ~700 units out, so haze reduces it to a
    silhouette. Without it the dune field simply ends and the eye has nothing
-   to read as "far". One instanced mesh, no shadows, no extra draw pass. */
+   to read as "far". One instanced mesh, no shadows, no extra draw pass.
+   The first attempt used widely spaced tall slabs; from any eastern viewpoint
+   the plateau hid their feet and only the tops peeked over it, so it read as a
+   row of blocks floating in the sky. It has to be one unbroken silhouette,
+   barely taller than the plateau it stands behind. */
 function buildFarRidge() {
   const list = [];
-  const rr = mulberry32(0x7E11);
-  for (let z = WZ0 - 60; z < WZ1 + 60; z += 7.5) {
-    const ridge = 62 + 46 * Math.pow(ridged(z * 0.0075 + 3.1, 0.7), 1.25)
-                     + 14 * (fbm(z * 0.026, 11.0, 3) - 0.5);
-    const x = -352 - rr() * 22;
-    const w = 8 + rr() * 9;
-    const shade = 0.86 + rr() * 0.22;
-    list.push({ x, y: ridge * 0.5 - 8, z, sx: w, sy: ridge + 16, sz: w,
-      col: new THREE.Color(0xB59A72).multiplyScalar(shade) });
-    if (rr() > 0.55) {
-      const r2 = ridge * (0.62 + rr() * 0.26);
-      list.push({ x: x + 16 + rr() * 14, y: r2 * 0.5 - 8, z: z + (rr() - 0.5) * 6,
-        sx: w * 0.8, sy: r2 + 16, sz: w * 0.8,
-        col: new THREE.Color(0xC0A67E).multiplyScalar(0.9 + rr() * 0.18) });
+  const step = 5.0;
+  const col = new THREE.Color();
+  for (let z = WZ0 - 80; z < WZ1 + 80; z += step) {
+    const ridge = 50 + 13 * Math.pow(ridged(z * 0.0062 + 3.1, 0.7), 1.4)
+                     +  7 * (fbm(z * 0.019, 11.0, 3) - 0.5) * 2;
+    // two overlapping ranks give the skyline a little depth of its own
+    for (const [dx, dh, tone] of [[0, 0, 1.0], [27, -8.0, 1.08]]) {
+      const hh = ridge + dh + 3.0 * (vnoise(z * 0.07 + dx, 5.0) - 0.5);
+      col.setHex(0xBBA57E).multiplyScalar(tone * (0.94 + 0.10 * vnoise(z * 0.05 + dx, 17.0)));
+      list.push({ x: -344 + dx, y: (hh + 24) * 0.5 - 24, z,
+        sx: step * 1.04, sy: hh + 24, sz: step * 1.04, col: col.clone() });
     }
   }
   const mesh = instancedBoxes(list, matSand, 'farRidge');
@@ -1667,40 +1717,75 @@ function buildSphinx() {
 const PALM_TRUNK = [0x8C6E48, 0x9C8058, 0x7A5F3E];
 const FROND = [0x2F7A24, 0x3C8F2A, 0x256B1F, 0x4C9E33];
 
-function buildPalmGeometry(seed) {
-  const r = mulberry32(seed);
-  const s = new BoxSoup();
-  const H = 6.4 + r() * 3.6;
-  const segs = 8, bend = (r() - 0.5) * 1.3;
-  const trunkCol = PALM_TRUNK[(r() * 3) | 0];
-  for (let i = 0; i < segs; i++) {
-    const t = i / segs, ty = t * t * bend;
-    const w = mix(0.46, 0.27, t);
-    s.add(ty, H * t + H / segs / 2, ty * 0.4, w, H / segs * 1.06, w,
-      C(trunkCol).multiplyScalar(0.86 + 0.14 * ((i % 2))), 63);
-  }
-  const cx = bend, cy = H, cz = bend * 0.4;
-  s.add(cx, cy + 0.16, cz, 0.72, 0.6, 0.72, C(0x6B4526), 63);
+/* Palm archetypes. A single silhouette repeated 980 times is the loudest
+   copy-paste tell in the scene, so the groves are mixed from six: mature,
+   young, old-and-tall, wind-leaned, forked doum, and dead stump. */
+const PALM_KIND = [
+  { h: [6.4, 3.6], bend: 1.3, lean: 0.0, nf: [9, 3], slim: 1.00, dates: 3 },
+  { h: [3.0, 1.5], bend: 0.8, lean: 0.0, nf: [6, 2], slim: 1.16, dates: 0 },
+  { h: [9.6, 3.2], bend: 1.0, lean: 0.0, nf: [7, 2], slim: 0.76, dates: 4, droop: 1.45 },
+  { h: [5.8, 2.6], bend: 1.4, lean: 1.7, nf: [8, 3], slim: 0.92, dates: 2, droop: 1.15 },
+  { h: [4.6, 2.0], bend: 1.6, lean: 0.0, nf: [6, 2], slim: 1.04, dates: 0, fork: true },
+  { h: [4.2, 3.0], bend: 1.1, lean: 0.4, nf: [3, 2], slim: 0.88, dates: 0, dead: true },
+];
 
-  const nf = 9 + ((r() * 3) | 0);
+function palmCrown(s, cx, cy, cz, r, k, sc, dead) {
+  s.add(cx, cy + 0.16 * sc, cz, 0.72 * sc, 0.6 * sc, 0.72 * sc, C(dead ? 0x5E5039 : 0x6B4526), 63);
+  const nf = k.nf[0] + ((r() * k.nf[1]) | 0);
+  const dr = k.droop || 1.0;
   for (let f = 0; f < nf; f++) {
     const a = (f / nf) * Math.PI * 2 + r() * 0.28;
-    const pitch = 0.42 + r() * 0.55;
-    const fc = C(FROND[(r() * FROND.length) | 0]);
-    const len = 5;
-    for (let k = 0; k < len; k++) {
-      const rr = 0.52 + k * 0.46;
-      const yy = cy + Math.sin(pitch) * rr - 0.30 * rr * rr;
+    const pitch = (dead ? -0.30 : 0.42) + r() * 0.55;
+    const fc = C(dead ? 0x7C6B40 : FROND[(r() * FROND.length) | 0]);
+    const len = dead ? 4 : 5;
+    for (let k2 = 0; k2 < len; k2++) {
+      const rr = (0.52 + k2 * 0.46) * sc;
+      const yy = cy + Math.sin(pitch) * rr - 0.30 * dr * rr * rr;
       const px = cx + Math.cos(a) * rr, pz = cz + Math.sin(a) * rr;
-      const droop = -Math.atan2(0.62 * rr, 1) + pitch * 0.35;
-      s.add(px, yy, pz, 0.60, 0.115, 0.46 - k * 0.05,
-        fc.clone().multiplyScalar(0.84 + 0.16 * (1 - k / len)), 63, -a, droop);
+      const droop = -Math.atan2(0.62 * dr * rr, 1) + pitch * 0.35;
+      s.add(px, yy, pz, 0.60 * sc, 0.115 * sc, (0.46 - k2 * 0.05) * sc,
+        fc.clone().multiplyScalar(0.84 + 0.16 * (1 - k2 / len)), 63, -a, droop);
     }
   }
-  // dates
-  for (let d = 0; d < 3; d++) {
+  for (let d = 0; d < k.dates; d++) {
     const a = d * 2.1;
-    s.add(cx + Math.cos(a) * 0.55, cy - 0.34, cz + Math.sin(a) * 0.55, 0.40, 0.52, 0.40, C(0xC07C1E), 63);
+    s.add(cx + Math.cos(a) * 0.55 * sc, cy - 0.34 * sc, cz + Math.sin(a) * 0.55 * sc,
+      0.40 * sc, 0.52 * sc, 0.40 * sc, C(0xC07C1E), 63);
+  }
+}
+
+function buildPalmGeometry(seed, kind = 0) {
+  const k = PALM_KIND[kind];
+  const r = mulberry32(seed);
+  const s = new BoxSoup();
+  const H = k.h[0] + r() * k.h[1];
+  const segs = 8, bend = (r() - 0.5) * k.bend + (r() < 0.5 ? -k.lean : k.lean);
+  const trunkCol = PALM_TRUNK[(r() * 3) | 0];
+  const tw = k.slim;
+  for (let i = 0; i < segs; i++) {
+    const t = i / segs, ty = t * t * bend;
+    const w = mix(0.46, 0.27, t) * tw;
+    s.add(ty, H * t + H / segs / 2, ty * 0.4, w, H / segs * 1.06, w,
+      C(k.dead ? 0x6E5C42 : trunkCol).multiplyScalar(0.86 + 0.14 * ((i % 2))), 63);
+  }
+  const cx = bend, cy = H, cz = bend * 0.4;
+  if (k.fork) {
+    // the doum palm forks into two smaller crowns — a silhouette nothing else
+    // in the grove shares, so a handful of them break the whole carpet up
+    for (const [sx, sz, sc] of [[1.0, 0.4, 0.74], [-0.9, -0.5, 0.62]]) {
+      const bx = cx + sx * 1.5, bz = cz + sz * 1.5;
+      for (let i = 0; i < 3; i++) {
+        const t = (i + 0.5) / 3;
+        s.add(cx + (bx - cx) * t, H + t * 1.7, cz + (bz - cz) * t,
+          0.30, 0.66, 0.30, C(trunkCol).multiplyScalar(0.90), 63);
+      }
+      palmCrown(s, bx, H + 1.9, bz, r, k, sc, false);
+    }
+  } else if (k.dead) {
+    s.add(cx, H + 0.26, cz, 0.34 * tw, 0.52, 0.34 * tw, C(0x5E5039), 63);
+    palmCrown(s, cx, cy, cz, r, k, 0.82, true);
+  } else {
+    palmCrown(s, cx, cy, cz, r, k, 1.0, false);
   }
   return s.geometry();
 }
@@ -1854,7 +1939,11 @@ function scatter(geoms, material, spec) {
     if (spec.avoidBuilt && isOccupied(x, z)) continue;
     if (spec.density && r() > spec.density(x, z)) continue;
     const yBase = spec.onWater ? WATER_Y - 0.1 : h - (spec.sink ?? 0.4);
-    buckets[(r() * geoms.length) | 0].push({ x, y: yBase, z, s: mix(spec.s0, spec.s1, r()),
+    // which variant goes where can depend on the site, so age and form
+    // correlate with the ground instead of being sprinkled uniformly
+    const gk = spec.pick ? clamp(spec.pick(x, z, h, r()) | 0, 0, geoms.length - 1)
+                         : (r() * geoms.length) | 0;
+    buckets[gk].push({ x, y: yBase, z, s: mix(spec.s0, spec.s1, r()),
       rot: r() * 6.283, v1: r(), v2: r(), v3: r() });
     placed++;
   }
@@ -1891,7 +1980,13 @@ function scatter(geoms, material, spec) {
 }
 
 function populateLife() {
-  const palmGeos = [buildPalmGeometry(11), buildPalmGeometry(29), buildPalmGeometry(73), buildPalmGeometry(151)];
+  // 0-3 mature | 4 young | 5-6 old and tall | 7 leaned | 8 doum | 9 dead
+  const palmGeos = [
+    buildPalmGeometry(11), buildPalmGeometry(29), buildPalmGeometry(73), buildPalmGeometry(151),
+    buildPalmGeometry(37, 1), buildPalmGeometry(211, 2), buildPalmGeometry(83, 2),
+    buildPalmGeometry(139, 3), buildPalmGeometry(197, 4), buildPalmGeometry(53, 5),
+  ];
+  const PALM_GROUPS = [[0, 1, 2, 3], [4], [5, 6], [7], [8], [9]];
   const papGeos = [buildPapyrusGeometry(5), buildPapyrusGeometry(41), buildPapyrusGeometry(97)];
   const scrubGeos = [buildScrubGeometry(3), buildScrubGeometry(17), buildScrubGeometry(59), buildScrubGeometry(83)];
 
@@ -1907,6 +2002,17 @@ function populateLife() {
       const clump = sstep(0.38, 0.68, fbm(x * 0.105 + 61, z * 0.105 + 17, 2));
       const bank = 1 - sstep(WATER_Y + 2.2, WATER_Y + 6.6, sampleH(x, z));
       return clamp(0.05 + grove * (0.35 + 0.85 * clump), 0, 1) * (0.35 + 0.65 * bank);
+    },
+    pick: (x, z, h, rv) => {
+      // tall old palms in the wet heart of the grove, leaners out over the
+      // water, young stock and stumps on the dry margin
+      const wet = 1 - sstep(WATER_Y + 1.4, WATER_Y + 6.2, h);
+      const w = [0.40, 0.09 + 0.20 * (1 - wet), 0.13 + 0.17 * wet,
+                 0.03 + 0.17 * wet, 0.05, 0.03 + 0.06 * (1 - wet)];
+      let t = rv * w.reduce((a, b) => a + b, 0), i = 0;
+      while (i < w.length - 1 && t > w[i]) { t -= w[i]; i++; }
+      const g = PALM_GROUPS[i];
+      return g[((rv * 1009) | 0) % g.length];
     },
   });
 
