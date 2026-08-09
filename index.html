@@ -615,7 +615,7 @@ THREE.ShaderChunk.fog_fragment = `
 
 // cheap sin-free 3D value noise for per-fragment surface variation
 const DETAIL_GLSL = `
-uniform float uDetScale, uDetNormal, uDetRough, uDetTint;
+uniform float uDetScale, uDetNormal, uDetRough, uDetTint, uDetBand;
 float dnHash(vec3 p){
   p = fract(p * 0.3183099 + vec3(0.11, 0.27, 0.43));
   p *= 17.0;
@@ -633,9 +633,10 @@ float dnNoise(vec3 p){
 const RIM = { uRimStr: { value: 0.0 }, uRimCol: { value: C(0xFFD9A0) } };
 
 /** every lit material gets the shared atmosphere uniforms; opt into grain */
-function patchMaterial(mat, detail, rim) {
+function patchMaterial(mat, detail, rim, masonry) {
   mat.userData.detail = detail || null;
   mat.userData.rim = !!rim;
+  mat.userData.masonry = masonry || null;
   const prev = mat.onBeforeCompile;
   mat.onBeforeCompile = (sh, renderer) => {
     if (prev) prev(sh, renderer);
@@ -655,12 +656,44 @@ function patchMaterial(mat, detail, rim) {
             gl_FragColor.rgb += uRimCol * rim * sunFace * uRimStr;
           }`);
     }
+    const mz = mat.userData.masonry;
+    if (mz) {
+      sh.uniforms.uMzH = { value: mz.h };
+      sh.uniforms.uMzW = { value: mz.w };
+      sh.uniforms.uMzSeam = { value: mz.seam };
+      sh.uniforms.uMzJoint = { value: mz.joint };
+      sh.uniforms.uMzVar = { value: mz.vary };
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', `#include <common>
+          uniform float uMzH, uMzW, uMzSeam, uMzJoint, uMzVar;`)
+        .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
+          {
+            // pick the two world axes least aligned with the face normal, so the
+            // course pattern lies in the plane of the wall whatever way it faces
+            vec3 mzN = normalize((vec4(normal, 0.0) * viewMatrix).xyz);
+            vec3 an = abs(mzN);
+            vec2 fc = (an.y > max(an.x, an.z)) ? vec2(vFogWorld.x, vFogWorld.z)
+                    : (an.x > an.z)            ? vec2(vFogWorld.z, vFogWorld.y)
+                                               : vec2(vFogWorld.x, vFogWorld.y);
+            float row = floor(fc.y / uMzH);
+            float bond = fract(row * 0.5) * uMzW;          // running bond
+            float colx = floor((fc.x + bond) / uMzW);
+            vec2 inb = vec2(fract((fc.x + bond) / uMzW), fract(fc.y / uMzH));
+            float seam = min(min(inb.x, 1.0 - inb.x), min(inb.y, 1.0 - inb.y));
+            float joint = 1.0 - smoothstep(0.0, uMzSeam, seam);
+            float bh = dnHash(vec3(colx, row, 3.7));
+            diffuseColor.rgb *= 1.0 + (bh - 0.5) * uMzVar;
+            diffuseColor.rgb *= 1.0 - joint * uMzJoint;
+            roughnessFactor = clamp(roughnessFactor + joint * 0.20, 0.04, 1.0);
+          }`);
+    }
     const d = mat.userData.detail;
     if (!d) return;
     sh.uniforms.uDetScale = { value: d.scale };
     sh.uniforms.uDetNormal = { value: d.normal };
     sh.uniforms.uDetRough = { value: d.rough };
     sh.uniforms.uDetTint = { value: d.tint };
+    sh.uniforms.uDetBand = { value: d.band || 0.0 };
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', '#include <common>\n' + DETAIL_GLSL)
       .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
@@ -673,15 +706,22 @@ function patchMaterial(mat, detail, rim) {
           normal = normalize(normal + pert * uDetNormal);
           roughnessFactor = clamp(roughnessFactor + (na - 0.5) * uDetRough, 0.04, 1.0);
           diffuseColor.rgb *= 1.0 + (na - 0.5) * uDetTint;
+          if (uDetBand > 0.001) {
+            float stratum = dnHash(vec3(7.0, floor(vFogWorld.y / 0.625), 11.0));
+            float stratum2 = dnHash(vec3(3.0, floor(vFogWorld.y / 2.5), 23.0));
+            diffuseColor.rgb *= 1.0 + ((stratum - 0.5) * 0.65 + (stratum2 - 0.5) * 0.35) * uDetBand;
+          }
         }`);
   };
   mat.needsUpdate = true;
   return mat;
 }
 
-patchMaterial(matSand,   { scale: 0.42, normal: 0.20, rough: 0.16, tint: 0.17 });
-patchMaterial(matStone,  { scale: 0.85, normal: 0.11, rough: 0.13, tint: 0.12 }, true);
-patchMaterial(matCasing, { scale: 1.30, normal: 0.06, rough: 0.10, tint: 0.055 }, true);
+patchMaterial(matSand,   { scale: 0.42, normal: 0.20, rough: 0.16, tint: 0.17, band: 0.155 });
+patchMaterial(matStone,  { scale: 0.85, normal: 0.11, rough: 0.13, tint: 0.12 }, true,
+              { h: 0.62, w: 1.30, seam: 0.070, joint: 0.24, vary: 0.130 });
+patchMaterial(matCasing, { scale: 1.30, normal: 0.06, rough: 0.10, tint: 0.055 }, true,
+              { h: 0.80, w: 1.75, seam: 0.055, joint: 0.20, vary: 0.105 });
 patchMaterial(matGold,   null);
 patchMaterial(matVeg,    null);
 patchMaterial(matProp,   { scale: 1.10, normal: 0.09, rough: 0.12, tint: 0.11 });
@@ -2065,7 +2105,7 @@ const PRESETS = [
     skyTop: 0x040A1C, skyMid: 0x081436, skyHor: 0x11224C, skyGnd: 0x080E20,
     hemiSky: 0x27395F, hemiGnd: 0x0F1426, hemiInt: 0.50,
     fillCol: 0x3F5A9A, fillInt: 0.26, fillDir: new THREE.Vector3(-0.5, 0.4, -0.6),
-    fog: 0x0A1230, fogD: 0.00042, fogSun: 0x4C6AA8, fogSunStr: 0.55, fogGround: 2.4, dust: 0.07, aerial: 0.00060, rim: 0.16, rimCol: 0xA8C4FF, exposure: 1.25, bloom: 0.95, stars: 1.0,
+    fog: 0x0A1230, fogD: 0.00042, fogSun: 0x4C6AA8, fogSunStr: 0.55, fogGround: 2.4, dust: 0.07, aerial: 0.00040, rim: 0.08, rimCol: 0xA8C4FF, exposure: 1.25, bloom: 0.95, stars: 1.0,
     sunGlow: 0.35, sunSize: 0.019, discInt: 8, hazeCol: 0x1E2E52, haze: 0.22,
     torch: 1.0, waterShallow: 0x2E8B6E, waterDeep: 0x0E3A3C, reflTint: 0xB9CCFF,
     reflStr: 1.0, sparkle: 0.95, waterGlow: 0.026, goldEm: 1.20, envInt: 1.10,
