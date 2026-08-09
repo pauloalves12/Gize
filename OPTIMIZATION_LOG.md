@@ -177,3 +177,118 @@ Everything added is either build-time (sky occlusion, mastabas, fields) or
 instanced. The adaptive ladder drops GTAO first and then the planar reflection
 resolution if frame times exceed 30 ms, so the heaviest additions are the first
 to go on a weak GPU.
+
+---
+
+# Second loop — bounded visual-polish pass
+
+Baseline for this loop is `bf93292`; accepted result is `50b0be8`. Eight fixed
+views were captured before and after: four presets, close pyramid, Sphinx,
+Nile/oasis, and a 390x844 mobile portrait.
+
+## Measured, all eight views
+
+| view | contrast | detail | saturation |
+|---|---|---|---|
+| Dawn | 50.9 → 50.6 | 4.67 → 4.47 | 36.3 → 35.5 |
+| High Noon | 39.4 → 38.7 | 4.76 → 4.79 | 26.1 → 25.9 |
+| Golden Hour | 54.1 → 55.3 | 4.12 → **4.58** | 44.6 → **46.8** |
+| Starry Night | 33.6 → 34.0 | 2.97 → 2.87 | 58.1 → 56.3 |
+| Close pyramid | 51.6 → 51.6 | 5.54 → **5.82** | 39.0 → 39.1 |
+| Sphinx | 48.2 → 48.3 | 5.23 → **5.66** | 47.3 → 46.8 |
+| Nile / oasis | 39.5 → 39.4 | 10.23 → 10.18 | 37.5 → 35.7 |
+| Mobile portrait | 54.8 → 54.5 | 4.89 → **5.30** | 45.4 → 44.9 |
+
+Mean relative change: **contrast ±0.0%, detail +3.1%, saturation −1.1%.**
+The target was +35%. It was not reached.
+
+## The bug that dominated this loop
+
+Three.js caches shader programs by a key derived from material parameters.
+`matSand`, `matCasing` and `matStone` are near-identical MeshStandardMaterials,
+so they shared one program — whichever rendered first — and every
+`onBeforeCompile` after that was silently discarded. Procedural masonry,
+large-scale weathering and the golden-hour limestone rim never executed; the
+stone surfaces were running the terrain material's shader. Anyone using
+`onBeforeCompile` must also set `customProgramCacheKey`.
+
+Found by elimination: a probe with deliberately absurd values (85% joint
+darkening, 8-unit blocks, bright red staining) produced no visible change, which
+ruled out weak amplitudes; extracting three's meshphysical fragment shader in
+node confirmed every injection anchor exists exactly once and in the right
+order, which ruled out the replacements.
+
+## Corrected rather than kept
+
+1. **Aerial perspective, first attempt.** Desaturated from zero distance and
+   lifted blacks toward a grey floor. Saturation fell (water 51.1 → 36.6),
+   contrast fell (close pyramid 62.1 → 50.4) and night got *brighter*
+   (40.0 → 56.3). Reworked to start beyond the monuments at 330 units, capped,
+   with no floor term.
+2. **Fine procedural masonry as the fix for regular pyramid faces.** A 0.1-unit
+   joint seen from 150 units at 820 px is far below one pixel. Kept, because it
+   costs nothing and earns its place in the Tour flyover, but it is not the
+   solution and is not claimed as one.
+3. **Night rim at 0.08.** Tuned while silently disabled; with the shader running
+   it lifted night mean 39.2 → 41.4 and cost 2.5 points of saturation. Now 0.025.
+4. **Patch generator emitting real newlines into single-quoted JS strings.**
+   Broke the module so the world never built. Rewritten with template literals,
+   and the render step is now gated on `node --check`.
+
+## Measurement flaws found and fixed
+
+- **Wall-clock waiting between preset switches.** Under software rendering
+  Chromium pauses `requestAnimationFrame` during screenshot capture, so a
+  5.5 s wait could pass without a single frame and the preset never applied. One
+  baseline view was captured showing High Noon while labelled Golden Hour, which
+  briefly produced a fake +27% saturation result. The rig now waits for twelve
+  rendered frames and asserts the active HUD button, logging a mismatch.
+- **Baseline built from the wrong commit** (`f5b446d` instead of `bf93292`).
+- **Adaptive quality ladder toggling mid-capture.** Software frame times always
+  exceed the 30 ms threshold, so GTAO switched off partway through a run; the
+  same pose measured 117.8 and 131.0 mean. Captures now freeze the ladder.
+- **Regression test reading light values four frames after a click.** The HUD
+  crossfades over 1.8 s with dt clamped to 0.05 s, so a settled reading needs
+  about 65 frames. It now polls until the values stop moving.
+
+## Regression check on `50b0be8`
+
+All ten checks pass, no console, page or shader errors:
+
+| check | result |
+|---|---|
+| Dawn | active, sun 3.20, elev 12°, stars 0.18, torch 0.20, hemi 0.88 |
+| High Noon | active, sun 4.50, elev 75°, stars 0, torch 0, exposure 0.97 |
+| Golden Hour | active, sun 5.00, elev 16°, dust 0.36, hemi 0.58 |
+| Starry Night | active, sun 0.68, moon elev 41°, stars 1.00, torch 1.00, exposure 1.25 |
+| presets numerically distinct | OK |
+| Cycle | latches, sun keeps drifting |
+| Tour | latches, camera flies 54.1 units |
+| Orbit drag | camera moves 106.5 units |
+| Wheel zoom | distance 322 → 223 |
+| Touch orbit, mobile | camera moves 120.4 units |
+| Mobile HUD | inside viewport, last button visible |
+
+## Performance
+
+No new textures, no new post-processing passes, no new draw calls — the added
+pyramid talus, core patches and entrances all go into existing instanced meshes.
+But the cache-key fix genuinely *raises* cost, because three of the four stone
+materials had been silently running a cheaper shader. Four programs now compile
+where one did before, and the masonry plus weathering add roughly 25-40 ALU
+operations per fragment on the largest surfaces in the scene. That cost is real
+and I could not measure it: software rendering makes frame timing meaningless
+here, so "no performance regression" is not a claim I can support on mobile.
+
+## Remaining limitations
+
+1. Pyramid faces still read as regular stepped courses at overview distance. One
+   box per course is the cause; only a geometry change would fix it, and that
+   risks the readable silhouette the brief asked to preserve.
+2. Vegetation metrics are flat. Clustering redistributed the plants but
+   silhouette variety is still four palm variants.
+3. Golden Hour is the only preset with a clear gain. Dawn and Night lose a little
+   detail and saturation as a designed consequence of aerial perspective.
+4. The detail metric — adjacent-pixel luminance difference at 240 px — cannot see
+   features finer than roughly three world units at overview distance, which is
+   exactly why the masonry failure was hard to catch numerically.
