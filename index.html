@@ -663,9 +663,16 @@ function patchMaterial(mat, detail, rim, masonry) {
       sh.uniforms.uMzSeam = { value: mz.seam };
       sh.uniforms.uMzJoint = { value: mz.joint };
       sh.uniforms.uMzVar = { value: mz.vary };
+      sh.uniforms.uWthVar = { value: mz.wthVar ?? 0.20 };
+      sh.uniforms.uWthAmt = { value: mz.wthAmt ?? 0.50 };
+      sh.uniforms.uWthY0 = { value: mz.wthY0 ?? 44.0 };
+      sh.uniforms.uWthY1 = { value: mz.wthY1 ?? 96.0 };
+      sh.uniforms.uWthStain = { value: C(mz.stain ?? 0xEAD2A8) };
       sh.fragmentShader = sh.fragmentShader
         .replace('#include <common>', `#include <common>
-          uniform float uMzH, uMzW, uMzSeam, uMzJoint, uMzVar;`)
+          uniform float uMzH, uMzW, uMzSeam, uMzJoint, uMzVar;
+          uniform float uWthVar, uWthAmt, uWthY0, uWthY1;
+          uniform vec3 uWthStain;`)
         .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
           {
             // pick the two world axes least aligned with the face normal, so the
@@ -685,6 +692,16 @@ function patchMaterial(mat, detail, rim, masonry) {
             diffuseColor.rgb *= 1.0 + (bh - 0.5) * uMzVar;
             diffuseColor.rgb *= 1.0 - joint * uMzJoint;
             roughnessFactor = clamp(roughnessFactor + joint * 0.20, 0.04, 1.0);
+
+            // large-scale weathering — the term that actually reads at distance
+            float wLo = dnNoise(vFogWorld * 0.052);
+            float wHi = dnNoise(vFogWorld * 0.155 + 31.0);
+            float blotch = wLo * 0.70 + wHi * 0.30;
+            float low = 1.0 - smoothstep(uWthY0, uWthY1, vFogWorld.y);
+            diffuseColor.rgb *= 1.0 + (blotch - 0.5) * uWthVar;
+            diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * uWthStain,
+                                   clamp((blotch - 0.34) * 1.7, 0.0, 1.0) * low * uWthAmt);
+            roughnessFactor = clamp(roughnessFactor + (blotch - 0.5) * 0.24, 0.04, 1.0);
           }`);
     }
     const d = mat.userData.detail;
@@ -717,11 +734,13 @@ function patchMaterial(mat, detail, rim, masonry) {
   return mat;
 }
 
-patchMaterial(matSand,   { scale: 0.42, normal: 0.20, rough: 0.16, tint: 0.17, band: 0.155 });
+patchMaterial(matSand,   { scale: 0.42, normal: 0.20, rough: 0.16, tint: 0.17, band: 0.30 });
 patchMaterial(matStone,  { scale: 0.85, normal: 0.11, rough: 0.13, tint: 0.12 }, true,
-              { h: 0.62, w: 1.30, seam: 0.070, joint: 0.24, vary: 0.130 });
+              { h: 0.62, w: 1.30, seam: 0.070, joint: 0.24, vary: 0.130,
+                wthVar: 0.22, wthAmt: 0.50, wthY0: 8, wthY1: 52, stain: 0xE0C39A });
 patchMaterial(matCasing, { scale: 1.30, normal: 0.06, rough: 0.10, tint: 0.055 }, true,
-              { h: 0.80, w: 1.75, seam: 0.055, joint: 0.20, vary: 0.105 });
+              { h: 0.80, w: 1.75, seam: 0.055, joint: 0.20, vary: 0.105,
+                wthVar: 0.26, wthAmt: 0.60, wthY0: 44, wthY1: 98, stain: 0xE6C79A });
 patchMaterial(matGold,   null);
 patchMaterial(matVeg,    null);
 patchMaterial(matProp,   { scale: 1.10, normal: 0.09, rough: 0.12, tint: 0.11 });
