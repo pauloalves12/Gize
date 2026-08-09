@@ -560,6 +560,8 @@ const ATMO = {
   fogSunStrength:  { value: 0.85 },
   aerial:          { value: 0.0011 },
   aerialNear:      { value: 330.0 },
+  aerialCool:      { value: C(0x9FB4D8) },
+  aerialCoolAmt:   { value: 0.0 },
 };
 
 THREE.ShaderChunk.fog_pars_vertex = `
@@ -589,8 +591,8 @@ THREE.ShaderChunk.fog_pars_fragment = `
     uniform float fogNear;
     uniform float fogFar;
   #endif
-  uniform float fogGroundY, fogHeightFalloff, fogGroundBoost, fogSunStrength, aerial, aerialNear;
-  uniform vec3 fogSunDir, fogSunColor;
+  uniform float fogGroundY, fogHeightFalloff, fogGroundBoost, fogSunStrength, aerial, aerialNear, aerialCoolAmt;
+  uniform vec3 fogSunDir, fogSunColor, aerialCool;
 #endif`;
 
 THREE.ShaderChunk.fog_fragment = `
@@ -604,9 +606,14 @@ THREE.ShaderChunk.fog_fragment = `
   #endif
   // aerial perspective: saturation bleeds out of the FAR field only. It starts
   // beyond the monuments and never lifts blacks, so silhouettes stay intact.
-  float aer = clamp( ( vFogDepth - aerialNear ) * aerial, 0.0, 0.55 );
+  float aer = clamp( ( vFogDepth - aerialNear ) * aerial, 0.0, 0.62 );
   float aLum = dot( gl_FragColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) );
   gl_FragColor.rgb = mix( gl_FragColor.rgb, vec3( aLum ), aer * 0.42 );
+  // local contrast compresses toward the region's own mean with distance, which
+  // is what actually makes far ground read as far rather than merely paler
+  gl_FragColor.rgb = mix( gl_FragColor.rgb, vec3( aLum * 0.72 + 0.14 ), aer * 0.30 );
+  // and a slight cool cast, scaled per preset so dawn and night keep their mood
+  gl_FragColor.rgb = mix( gl_FragColor.rgb, gl_FragColor.rgb * aerialCool, aer * aerialCoolAmt );
   vec3 fogV = normalize( vFogWorld - cameraPosition );
   float sunAmt = max( dot( fogV, fogSunDir ), 0.0 );
   vec3 fogTinted = mix( fogColor, fogSunColor, pow( sunAmt, 5.0 ) * fogSunStrength );
@@ -673,10 +680,11 @@ function patchMaterial(mat, detail, rim, masonry) {
       sh.uniforms.uWthY0 = { value: mz.wthY0 ?? 44.0 };
       sh.uniforms.uWthY1 = { value: mz.wthY1 ?? 96.0 };
       sh.uniforms.uWthStain = { value: C(mz.stain ?? 0xEAD2A8) };
+      sh.uniforms.uWthRunnel = { value: mz.runnel ?? 0.16 };
       sh.fragmentShader = sh.fragmentShader
         .replace('#include <common>', `#include <common>
           uniform float uMzH, uMzW, uMzSeam, uMzJoint, uMzVar;
-          uniform float uWthVar, uWthAmt, uWthY0, uWthY1;
+          uniform float uWthVar, uWthAmt, uWthY0, uWthY1, uWthRunnel;
           uniform vec3 uWthStain;`)
         .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
           {
@@ -703,6 +711,13 @@ function patchMaterial(mat, detail, rim, masonry) {
             float wHi = dnNoise(vFogWorld * 0.155 + 31.0);
             float blotch = wLo * 0.70 + wHi * 0.30;
             float low = 1.0 - smoothstep(uWthY0, uWthY1, vFogWorld.y);
+            // rain- and sand-cut runnels run down the face, breaking the
+            // horizontal reading that the courses impose
+            float rn = dnNoise(vec3(fc.x * 0.42, 3.0, 7.0));
+            float rn2 = dnNoise(vec3(fc.x * 1.15, 9.0, 2.0));
+            float runnel = smoothstep(0.58, 0.92, rn) * 0.75 + smoothstep(0.70, 0.97, rn2) * 0.25;
+            diffuseColor.rgb *= 1.0 - runnel * uWthRunnel * (0.35 + 0.65 * low);
+            roughnessFactor = clamp(roughnessFactor + runnel * 0.16, 0.04, 1.0);
             diffuseColor.rgb *= 1.0 + (blotch - 0.5) * uWthVar;
             diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * uWthStain,
                                    clamp((blotch - 0.34) * 1.7, 0.0, 1.0) * low * uWthAmt);
@@ -742,10 +757,10 @@ function patchMaterial(mat, detail, rim, masonry) {
 patchMaterial(matSand,   { scale: 0.42, normal: 0.20, rough: 0.16, tint: 0.17, band: 0.30 });
 patchMaterial(matStone,  { scale: 0.85, normal: 0.11, rough: 0.13, tint: 0.12 }, true,
               { h: 0.62, w: 1.30, seam: 0.070, joint: 0.24, vary: 0.130,
-                wthVar: 0.22, wthAmt: 0.50, wthY0: 8, wthY1: 52, stain: 0xE0C39A });
+                wthVar: 0.24, wthAmt: 0.50, wthY0: 8, wthY1: 52, stain: 0xE0C39A, runnel: 0.15 });
 patchMaterial(matCasing, { scale: 1.30, normal: 0.06, rough: 0.10, tint: 0.055 }, true,
               { h: 0.80, w: 1.75, seam: 0.055, joint: 0.20, vary: 0.105,
-                wthVar: 0.26, wthAmt: 0.60, wthY0: 44, wthY1: 98, stain: 0xE6C79A });
+                wthVar: 0.30, wthAmt: 0.60, wthY0: 44, wthY1: 98, stain: 0xE6C79A, runnel: 0.20 });
 patchMaterial(matGold,   null);
 patchMaterial(matVeg,    null);
 patchMaterial(matProp,   { scale: 1.10, normal: 0.09, rough: 0.12, tint: 0.11 });
@@ -1145,31 +1160,39 @@ function buildPyramid(p, baseY, courseH = 0.8, opts = {}) {
   const pr = mulberry32(((p.cx * 73856093) ^ (p.cz * 19349663) ^ 0x9E37) >>> 0);
   const SAND_STAIN = C(0xC9B588), CORE = C(0xA89C84);
 
-  for (let i = 0; i < n; i++) {
-    const t = i / n;
-    const y = baseY + i * courseH + courseH * 0.5;
-    if (i >= n - goldN) {
-      pushBox(goldList, p.cx, y, p.cz, p.b * (1 - t), courseH * 1.02, p.b * (1 - t), 0xFFD700);
-      continue;
-    }
-    // Courses settle and weather: a hair of footprint and lateral jitter stops
-    // the profile reading as one machined ramp, without softening the silhouette.
+  const goldFrac = 0.075, goldBase = baseY + p.h * (1 - goldFrac);
+  let cy = baseY, ci = 0;
+  while (cy < goldBase - 1e-4) {
+    // deterministic course height, 0.58x to 1.52x nominal: this is what kills
+    // the even striping, and the silhouette never notices
+    let hh = courseH * (0.58 + 0.94 * vnoise(ci * 1.37 + p.cx * 0.11, ci * 0.53 + p.cz * 0.07));
+    hh = Math.min(hh, goldBase - cy);
+    const t = (cy - baseY) / p.h;
     const s = p.b * (1 - t) + (pr() - 0.5) * 0.30;
     const jx = (pr() - 0.5) * 0.34, jz = (pr() - 0.5) * 0.34;
-    // wind-blown sand stains the foot; the crown is sun-bleached
     const stain = 1 - sstep(0.0, 0.46, t);
     const col = new THREE.Color(LIME).lerp(SAND_STAIN, stain * 0.30);
-    col.multiplyScalar(0.945 + 0.040 * ((i % 7) / 6) + 0.075 * (vnoise(i * 0.83, p.cx * 0.17) - 0.5));
-    casingList.push({ x: p.cx + jx, y, z: p.cz + jz, sx: s, sy: courseH * 1.02, sz: s, col });
+    col.multiplyScalar(0.945 + 0.055 * (vnoise(ci * 0.71, p.cz * 0.19) - 0.5) * 2
+                             + 0.075 * (vnoise(ci * 0.83, p.cx * 0.17) - 0.5));
+    casingList.push({ x: p.cx + jx, y: cy + hh * 0.5, z: p.cz + jz,
+                      sx: s, sy: hh * 1.03, sz: s, col });
+    cy += hh; ci++;
   }
+  const gN = Math.max(3, goldN);
+  for (let i = 0; i < gN; i++) {
+    const y0 = goldBase + (p.h * goldFrac) * (i / gN);
+    const gt = (y0 - baseY) / p.h;
+    pushBox(goldList, p.cx, y0 + (p.h * goldFrac) / gN * 0.5, p.cz,
+            p.b * (1 - gt), (p.h * goldFrac) / gN * 1.04, p.b * (1 - gt), 0xFFD700);
+  }
+  const n2 = ci;
 
   // Casing robbed away at the foot: patches of coarser core masonry sitting
   // flush with the face, and blocks that worked loose and slid to the base.
-  const patches = Math.round(n * 0.55), half0 = p.b / 2;
+  const patches = Math.round(n2 * 0.55), half0 = p.b / 2;
   for (let k = 0; k < patches; k++) {
-    const i = Math.floor(Math.pow(pr(), 2.1) * n * 0.44);
-    const t = i / n, half = (p.b * (1 - t)) / 2;
-    const y = baseY + i * courseH + courseH * 0.5;
+    const t = Math.pow(pr(), 2.1) * 0.44, half = (p.b * (1 - t)) / 2;
+    const y = baseY + p.h * t + courseH * 0.5;
     const u = (pr() - 0.5) * p.b * (1 - t) * 0.88;
     const w = courseH * (1.1 + pr() * 1.5);
     const face = (pr() * 4) | 0;
@@ -1181,7 +1204,7 @@ function buildPyramid(p, baseY, courseH = 0.8, opts = {}) {
     stoneList.push({ x, y, z, sx: w, sy: courseH * (0.9 + pr() * 0.7), sz: w,
       col: CORE.clone().multiplyScalar(0.78 + pr() * 0.30) });
   }
-  const debris = Math.round(n * 0.36);
+  const debris = Math.round(n2 * 0.36);
   for (let k = 0; k < debris; k++) {
     const a = pr() * 6.283, r = half0 + 0.8 + Math.pow(pr(), 1.7) * p.b * 0.16;
     const x = p.cx + Math.cos(a) * r, z = p.cz + Math.sin(a) * r;
@@ -1424,6 +1447,34 @@ function buildMastabas() {
   }
 }
 
+/* ---- 7h-ter. the western escarpment on the far horizon ------------------
+   Purely a depth-layering device: ~700 units out, so haze reduces it to a
+   silhouette. Without it the dune field simply ends and the eye has nothing
+   to read as "far". One instanced mesh, no shadows, no extra draw pass. */
+function buildFarRidge() {
+  const list = [];
+  const rr = mulberry32(0x7E11);
+  for (let z = WZ0 - 60; z < WZ1 + 60; z += 7.5) {
+    const ridge = 62 + 46 * Math.pow(ridged(z * 0.0075 + 3.1, 0.7), 1.25)
+                     + 14 * (fbm(z * 0.026, 11.0, 3) - 0.5);
+    const x = -352 - rr() * 22;
+    const w = 8 + rr() * 9;
+    const shade = 0.86 + rr() * 0.22;
+    list.push({ x, y: ridge * 0.5 - 8, z, sx: w, sy: ridge + 16, sz: w,
+      col: new THREE.Color(0xB59A72).multiplyScalar(shade) });
+    if (rr() > 0.55) {
+      const r2 = ridge * (0.62 + rr() * 0.26);
+      list.push({ x: x + 16 + rr() * 14, y: r2 * 0.5 - 8, z: z + (rr() - 0.5) * 6,
+        sx: w * 0.8, sy: r2 + 16, sz: w * 0.8,
+        col: new THREE.Color(0xC0A67E).multiplyScalar(0.9 + rr() * 0.18) });
+    }
+  }
+  const mesh = instancedBoxes(list, matSand, 'farRidge');
+  mesh.castShadow = false;              // far outside the shadow frustum anyway
+  scene.add(mesh);
+  return list.length;
+}
+
 /* ---- 7i. assemble the plateau ------------------------------------------ */
 function buildMonuments() {
   buildPyramid(KHUFU, PLATEAU_Y - 0.3, 0.8, { entrance: true });
@@ -1444,6 +1495,7 @@ function buildMonuments() {
   buildEnclosure(SPHINX_PAD, SPHINX_Y);
   buildQuays();
   buildMastabas();
+  buildFarRidge();
 
   // stela between the Sphinx's paws
   pushBox(stoneList, 80.5, SPHINX_Y + 1.9, -24, 0.9, 3.8, 3.0, GRAN_R);
@@ -2093,7 +2145,7 @@ const PRESETS = [
     skyTop: 0x122F62, skyMid: 0xA5719C, skyHor: 0xF6A472, skyGnd: 0x6B4A38,
     hemiSky: 0x7EA0D6, hemiGnd: 0x5A4A6A, hemiInt: 0.88,
     fillCol: 0x6D86C8, fillInt: 0.55, fillDir: new THREE.Vector3(-0.7, 0.5, 0.4),
-    fog: 0xC49B90, fogD: 0.00044, fogSun: 0xFFD2A8, fogSunStr: 1.10, fogGround: 3.4, dust: 0.30, aerial: 0.00115, rim: 0.30, rimCol: 0xFFC79A, exposure: 1.00, bloom: 0.48, stars: 0.18,
+    fog: 0xC49B90, fogD: 0.00044, fogSun: 0xFFD2A8, fogSunStr: 1.10, fogGround: 3.4, dust: 0.30, aerial: 0.00150, rim: 0.30, aerialCool: 0.55, rimCol: 0xFFC79A, exposure: 1.00, bloom: 0.48, stars: 0.18,
     sunGlow: 0.75, sunSize: 0.0145, discInt: 12, hazeCol: 0xFFC9A6, haze: 0.62,
     torch: 0.20, waterShallow: 0x6BC3A0, waterDeep: 0x225E52, reflTint: 0xFFD8C0,
     reflStr: 0.92, sparkle: 1.15, waterGlow: 0.008, goldEm: 0.60, envInt: 1.15,
@@ -2105,7 +2157,7 @@ const PRESETS = [
     skyTop: 0x1655BE, skyMid: 0x5AA6F0, skyHor: 0xBADCFF, skyGnd: 0xA98F62,
     hemiSky: 0xA6D2FF, hemiGnd: 0xD2AE6C, hemiInt: 1.10,
     fillCol: 0xBFD8FF, fillInt: 0.80, fillDir: new THREE.Vector3(-0.5, 0.35, -0.6),
-    fog: 0xB6D2EE, fogD: 0.00026, fogSun: 0xFFF4E2, fogSunStr: 0.35, fogGround: 1.3, dust: 0.09, aerial: 0.00080, rim: 0.12, rimCol: 0xFFF2DC, exposure: 0.97, bloom: 0.40, stars: 0,
+    fog: 0xB6D2EE, fogD: 0.00026, fogSun: 0xFFF4E2, fogSunStr: 0.35, fogGround: 1.3, dust: 0.09, aerial: 0.00115, rim: 0.12, aerialCool: 0.80, rimCol: 0xFFF2DC, exposure: 0.97, bloom: 0.40, stars: 0,
     sunGlow: 0.45, sunSize: 0.011, discInt: 16, hazeCol: 0xDCECFF, haze: 0.28,
     torch: 0, waterShallow: 0x50CE8C, waterDeep: 0x1B6B47, reflTint: 0xFFFFFF,
     reflStr: 0.80, sparkle: 1.6, waterGlow: 0.0, goldEm: 0.30, envInt: 1.55,
@@ -2117,7 +2169,7 @@ const PRESETS = [
     skyTop: 0x13265C, skyMid: 0xC96A6E, skyHor: 0xFF8C3A, skyGnd: 0x7A4A28,
     hemiSky: 0x5C6ACB, hemiGnd: 0x8A5A48, hemiInt: 0.58,
     fillCol: 0x7A82E0, fillInt: 0.55, fillDir: new THREE.Vector3(0.62, 0.45, 0.60),
-    fog: 0xC08A6E, fogD: 0.00036, fogSun: 0xFFB870, fogSunStr: 1.20, fogGround: 2.6, dust: 0.36, aerial: 0.00105, rim: 0.46, rimCol: 0xFFC078, exposure: 1.00, bloom: 0.56, stars: 0.06,
+    fog: 0xC08A6E, fogD: 0.00036, fogSun: 0xFFB870, fogSunStr: 1.20, fogGround: 2.6, dust: 0.36, aerial: 0.00170, rim: 0.46, aerialCool: 0.30, rimCol: 0xFFC078, exposure: 1.00, bloom: 0.56, stars: 0.06,
     sunGlow: 0.70, sunSize: 0.0155, discInt: 12, hazeCol: 0xFFB070, haze: 0.60,
     torch: 0.16, waterShallow: 0x55BF88, waterDeep: 0x1C5C41, reflTint: 0xFFC898,
     reflStr: 0.95, sparkle: 1.45, waterGlow: 0.012, goldEm: 0.85, envInt: 1.20,
@@ -2129,14 +2181,14 @@ const PRESETS = [
     skyTop: 0x040A1C, skyMid: 0x081436, skyHor: 0x11224C, skyGnd: 0x080E20,
     hemiSky: 0x27395F, hemiGnd: 0x0F1426, hemiInt: 0.50,
     fillCol: 0x3F5A9A, fillInt: 0.26, fillDir: new THREE.Vector3(-0.5, 0.4, -0.6),
-    fog: 0x0A1230, fogD: 0.00042, fogSun: 0x4C6AA8, fogSunStr: 0.55, fogGround: 2.4, dust: 0.07, aerial: 0.00040, rim: 0.025, rimCol: 0xA8C4FF, exposure: 1.25, bloom: 0.95, stars: 1.0,
+    fog: 0x0A1230, fogD: 0.00042, fogSun: 0x4C6AA8, fogSunStr: 0.55, fogGround: 2.4, dust: 0.07, aerial: 0.00070, rim: 0.025, aerialCool: 0.65, rimCol: 0xA8C4FF, exposure: 1.25, bloom: 0.95, stars: 1.0,
     sunGlow: 0.35, sunSize: 0.019, discInt: 8, hazeCol: 0x1E2E52, haze: 0.22,
     torch: 1.0, waterShallow: 0x2E8B6E, waterDeep: 0x0E3A3C, reflTint: 0xB9CCFF,
     reflStr: 1.0, sparkle: 0.95, waterGlow: 0.026, goldEm: 1.20, envInt: 1.10,
   }),
 ];
 
-const NUMS = ['sunInt', 'hemiInt', 'fillInt', 'fogD', 'exposure', 'bloom', 'stars', 'fogSunStr', 'fogGround', 'dust', 'aerial', 'rim',
+const NUMS = ['sunInt', 'hemiInt', 'fillInt', 'fogD', 'exposure', 'bloom', 'stars', 'fogSunStr', 'fogGround', 'dust', 'aerial', 'rim', 'aerialCool',
   'sunGlow', 'sunSize', 'discInt', 'haze', 'torch', 'reflStr', 'sparkle', 'waterGlow', 'goldEm', 'envInt'];
 const COLS = ['sunCol', 'skyTop', 'skyMid', 'skyHor', 'skyGnd', 'hemiSky', 'hemiGnd', 'fillCol', 'fog', 'fogSun', 'rimCol', 'hazeCol',
   'waterShallow', 'waterDeep', 'reflTint'];
@@ -2183,6 +2235,7 @@ function applyLighting(t) {
   ATMO.fogSunStrength.value = live.fogSunStr;
   ATMO.fogGroundBoost.value = live.fogGround;
   ATMO.aerial.value = live.aerial;
+  ATMO.aerialCoolAmt.value = live.aerialCool;
   RIM.uRimStr.value = live.rim;
   RIM.uRimCol.value.copy(live.rimCol);
   renderer.toneMappingExposure = live.exposure;
