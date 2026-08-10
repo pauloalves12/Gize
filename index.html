@@ -243,7 +243,11 @@ function fieldAt(x, z) {
 /* ---- height field ------------------------------------------------------- */
 function duneHeight(x, z) {
   const warp = 0.35 * vnoise(x * 0.0035, z * 0.0035);
-  let h = 44 + 21 * Math.pow(ridged(x * 0.0105 + warp, z * 0.0042), 1.35);
+  // Crests used to reach ~70, i.e. 26 u above the plateau, so the dune field
+  // behind the pyramids cut across their lower two thirds and the silhouettes
+  // were read against sand instead of sky. Halving the ridge amplitude keeps a
+  // dune field but drops its horizon to just above the plateau top.
+  let h = 42 + 11 * Math.pow(ridged(x * 0.0105 + warp, z * 0.0042), 1.35);
   h += 8 * (fbm(x * 0.019, z * 0.019, 3) - 0.5);
   h += 2.4 * (fbm(x * 0.085, z * 0.085, 2) - 0.5);
   return h;
