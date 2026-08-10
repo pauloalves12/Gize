@@ -510,3 +510,92 @@ and distinct (Dawn 3.20/12 deg, Noon 4.50/75 deg, Golden 5.00/16 deg, Night
 the stated bottleneck is not present at overview distance, that four material
 levers cannot move it, and that the remaining route is geometry at a known and
 affordable cost. That is a useful result but it is not an improvement.
+
+# Round 5 — macro geometry and monumentality: the first clear win in three loops
+
+Scope was large-scale composition rather than surface detail, on the explicit
+premise that round 4 had proved nothing below ~4.5 u (6 px at overview) survives
+at this distance. Two of three passes were kept. Unlike rounds 3 and 4, this one
+started from a weakness that measurement actually confirmed.
+
+## The diagnosis this round worked from
+
+A skyline instrument was built for the loop: per column, the topmost non-sky
+pixel. The colour test that seemed obvious fails immediately -- at golden hour
+the sky is orange and at night deep blue -- so detection keys on SMOOTHNESS
+instead: sky is a clean vertical gradient, terrain and masonry are textured. The
+detected line was then drawn back onto the frames and inspected rather than
+trusted, which is how the earlier metric failures should have been caught.
+
+It showed a real problem: the pyramid apexes clear the plateau's own silhouette
+by roughly 35 px out of 470. The mesa is the dominant mass and the pyramids read
+as bumps on it.
+
+## Kept
+
+1. Four great terraces on the escarpment front, replacing the uniform slope.
+   Treads 12-20 u, risers 8-11 u, i.e. 16-27 px and 11-15 px on screen. The
+   terrace line wanders +/-2 u in z so it reads quarried rather than machined.
+   This is the loop's real win: the front went from a shapeless wall of thin
+   stripes to a stepped landform with genuine shadow between levels, confirmed
+   independently at golden hour and at noon. Terrain-only, so free.
+2. The dune horizon dropped, ridge amplitude 44 + 21 * ridged -> 42 + 11.
+   Crests had reached ~70, some 26 u above the 43.75 plateau top, putting the
+   field behind the pyramids across their lower two thirds. Apex clearance
+   against the background skyline improves +10 px golden, +5 noon, +26 mobile,
+   and sky fraction rises 0.4-0.6 points. Small, consistent, visible.
+
+Also added: the great quarry, a 65 x 64 u recess 9 u deep on the plateau
+(89 x 88 px with 12 px walls), sited clear of the Sphinx enclosure, all three
+causeways and the mastaba fields. Part of pass A and kept with it.
+
+## Rejected
+
+Stepped pyramid podiums -- a broad 10.5 u apron at 3.0 u plus a 5 u upper course
+at 5.4 u, ring segments self-policed against keep-out rectangles for temples,
+queens, neighbouring pyramids, mastaba fields and causeways. The engineering was
+sound and nothing got buried. It was reverted anyway: visible at 3.6x zoom,
+marginal at the real overview framing, and indistinguishable on mobile portrait
+where the bases sit behind the plateau edge and the temples. Cost was not the
+issue (+364 instances, +0.01M triangles) -- visibility was. This is the same
+"only reads in close-up" trap round 4 fell into four times.
+
+## Honest caveats
+
+- The terraces are carried by visual evidence, not by metrics. Skyline and
+  coarse-contrast instruments measure the outline and the frame; the terraces
+  change the plateau's front FACE, which no silhouette metric can see. Coarse
+  contrast moved +0.9 at golden and +0.9 at noon, which is not what is carrying
+  the judgement.
+- Mobile portrait is a narrow zoomed framing (48 deg vertical over 844 px), so
+  the escarpment front is largely out of frame. The loop's biggest gain does not
+  reach the viewport the brief emphasised most. Mobile is neutral, not improved,
+  apart from the dune-horizon effect.
+- Apex clearance is still modest in absolute terms. The pyramids read better than
+  before but the plateau remains the larger mass; genuinely reversing that would
+  mean raising the monuments or cutting the plateau down, both of which pull on
+  the causeway and temple elevation chain.
+
+## Performance
+
+  baseline 7ef46b1   52 meshes / 41 instanced / 67,114 instances / 2.23M tris / 35 programs
+  shipped  9613c4b   52 meshes / 41 instanced / 67,104 instances / 2.23M tris / 35 programs
+
+Both kept changes are terrain-only, and the terrain is a fixed-size heightfield
+grid, so the cost is nil. The ten-instance difference is vegetation and prop
+scatter reacting to the new heightfield, not added geometry. Boot 3.17 s -> 3.30 s,
+within run-to-run noise.
+
+## Regressions
+
+All four presets land exactly on their defined values and stay distinct
+(Dawn 3.20/12 deg, Noon 4.50/75 deg, Golden 5.00/16 deg, Night 0.68/41 deg).
+Cycle, Tour, orbit drag, wheel zoom, mobile touch orbit and the 390x844 HUD all
+pass. No console or page errors. 35 programs compile.
+
+## Position
+
+A real gain, and the first in three loops. Roughly 108-112 against the round-4
+state of 100 -- driven almost entirely by the escarpment terraces at overview
+distance, with a small consistent contribution from the dune horizon. Not
+transformative, and it does not touch mobile portrait.
