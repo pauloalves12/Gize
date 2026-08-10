@@ -1496,35 +1496,6 @@ function buildMastabas() {
   }
 }
 
-/* ---- 7h-ter. the western escarpment on the far horizon ------------------
-   Purely a depth-layering device: ~700 units out, so haze reduces it to a
-   silhouette. Without it the dune field simply ends and the eye has nothing
-   to read as "far". One instanced mesh, no shadows, no extra draw pass.
-   The first attempt used widely spaced tall slabs; from any eastern viewpoint
-   the plateau hid their feet and only the tops peeked over it, so it read as a
-   row of blocks floating in the sky. It has to be one unbroken silhouette,
-   barely taller than the plateau it stands behind. */
-function buildFarRidge() {
-  const list = [];
-  const step = 5.0;
-  const col = new THREE.Color();
-  for (let z = WZ0 - 80; z < WZ1 + 80; z += step) {
-    const ridge = 50 + 13 * Math.pow(ridged(z * 0.0062 + 3.1, 0.7), 1.4)
-                     +  7 * (fbm(z * 0.019, 11.0, 3) - 0.5) * 2;
-    // two overlapping ranks give the skyline a little depth of its own
-    for (const [dx, dh, tone] of [[0, 0, 1.0], [27, -8.0, 1.08]]) {
-      const hh = ridge + dh + 3.0 * (vnoise(z * 0.07 + dx, 5.0) - 0.5);
-      col.setHex(0xBBA57E).multiplyScalar(tone * (0.94 + 0.10 * vnoise(z * 0.05 + dx, 17.0)));
-      list.push({ x: -344 + dx, y: (hh + 24) * 0.5 - 24, z,
-        sx: step * 1.04, sy: hh + 24, sz: step * 1.04, col: col.clone() });
-    }
-  }
-  const mesh = instancedBoxes(list, matSand, 'farRidge');
-  mesh.castShadow = false;              // far outside the shadow frustum anyway
-  scene.add(mesh);
-  return list.length;
-}
-
 /* ---- 7i. assemble the plateau ------------------------------------------ */
 function buildMonuments() {
   buildPyramid(KHUFU, PLATEAU_Y - 0.3, 0.8, { entrance: true });
@@ -1545,7 +1516,6 @@ function buildMonuments() {
   buildEnclosure(SPHINX_PAD, SPHINX_Y);
   buildQuays();
   buildMastabas();
-  buildFarRidge();
 
   // stela between the Sphinx's paws
   pushBox(stoneList, 80.5, SPHINX_Y + 1.9, -24, 0.9, 3.8, 3.0, GRAN_R);
