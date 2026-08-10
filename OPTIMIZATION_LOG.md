@@ -406,3 +406,107 @@ one box per course and the fix I tried helps only close up. The terrain and
 horizon work, which was most of the round's effort, produced nothing measurable
 and was removed. What survives is three modest, verified gains and one regression
 of my own making caught and removed before shipping.
+
+# Round 4 — geometry & material pass on the pyramids: a null result, and why
+
+Scope was the pyramid faces, the complaint being that they still read as regular
+horizontal bands at overview distance, especially on mobile. Four material
+interventions were built and all four were reverted. index.html ends the round
+byte-identical to where it started (7ef46b1). The output of this round is the
+diagnosis and three repaired instruments, not a visual change.
+
+## Pass A — the measurement that reframed the problem
+
+At the overview pose (48 deg vertical fov, 470 px tall, ~385 units to the Khufu
+mid-face, focal 527.8 px):
+
+  one course (0.84 u average)                      1.15 px
+  same course, mobile portrait 390x844             2.07 px
+  4.5 u feature                                    6.2 px
+  8 u feature                                     11.0 px
+  19 u feature                                    26.0 px
+
+Khufu carries ~68 courses. The face is a periodic sub-pixel step pattern sampled
+at the Nyquist limit, so the "banding" is an alias rather than a material
+shortcoming. Measured stripe amplitude on the overview faces is 0.6-1.7 where a
+full-contrast 2 px stripe pattern scores 28.57, and the dominant periods are
+7-17 px, i.e. 7-12 world units -- the weathering-noise scale, not the courses. A
+genuine 2 px course stripe exists only close up, at 1.59%.
+
+Conclusion: the premise does not hold at overview distance. Nothing there is
+measurably banded.
+
+## What was built and why each one failed
+
+  B1 sub-pixel LOD fade (joints, grain, stratum band, fine runnel faded
+     110-300 u). Cleaned the shadowed faces but left them reading as plaster.
+     Its apparent 12% detail cost turned out to be framing jitter, not the
+     shader.
+  B2 course-top normal convergence, so +Y facets shade like the face at range.
+     At 12 deg viewing elevation the treads project to ~0.2 px, so there was
+     nothing to fix; the 6x crop shows the sunlit staircase unchanged.
+  B3 broad weathered panels at 16 u and 11 u (22 px and 15 px). Band power fell
+     slightly at every period instead of rising.
+  C  quarry tiers: per-course tone moved from ~1.4-course noise (1.6 px, pure
+     alias fodder) into coherent 7-18 course tiers (8-21 px). Within noise, and
+     confounded by a 5.5% brightness error of mine.
+  D  coarse vertical articulation at 6 u (8.2 px), staggered, tone-carried,
+     brightness-neutral. Column-wise high-pass energy moved -2.7% to +1.0%; the
+     8 px bin, where 6 u blocks must land, went 0.22->0.20, 0.46->0.48,
+     0.25->0.24, 0.28->0.28. Visually indistinguishable at 6x.
+
+D failed for a reason that explains the whole round: the casing already carries
++/-15% large-scale tonal variation (wthVar 0.30) across 6.5-19 u. A further
++/-3.75% at 6 u is a quarter of what is already there and disappears into it.
+The faces were never short of large-scale material breakup.
+
+## Four instrument failures, three of which corrupted numbers already reported
+
+1. banding() autocorrelated the row-mean luminance profile, but a smooth vertical
+   gradient is nearly perfectly self-correlated at small lags, so every pyramid
+   crop floored at 90-96 regardless of surface. Synthetic check: a pure ramp
+   scores 94.9 old / 0.00 corrected; pure 2 px stripes 100.0 / 28.57. This voids
+   round 3's headline "-17.6% banding" from variable course heights -- corrected,
+   that crop reads 3.92 -> 3.90.
+2. The capture rig carried 6-7 px of framing jitter: shots.mjs set the orbit pose
+   and waited 12 frames, but the loop moves the camera by a damped lerp
+   (1 - 0.02^dt) that lands near 90% with a timing-dependent residual. At 6x that
+   is +/-40 px of apparent shift. Fixed by snapping the camera to orbitPose; an
+   untouched terrain control band now differs by 0.38 px, 36/50 columns identical.
+3. Pass C brightened the casing 5.5% by accident (tier tone averaged 1.000 against
+   a baseline mean of 0.945), confounding every reading until a terrain control
+   band isolated it.
+4. stripe_amp and band_power both work on row means, so they are blind to vertical
+   articulation by construction -- I designed Pass D vertically and then measured
+   it horizontally. A column-wise version was needed to judge it at all.
+
+## The route that is actually open, with costs
+
+Per-face block segments, so that per-block tone, inset and missing blocks exist
+at a scale the overview resolves:
+
+  6 u segments -> 8.2 px on screen, 5140 casing instances, 0.06M triangles
+  9 u segments -> 12.3 px on screen, 3460 casing instances, 0.04M triangles
+
+Against a scene already carrying 67,114 instances and 2.23M triangles this is
+cheap: roughly +7.7% instances and +2.7% triangles for the 6 u variant. My
+earlier claim that a rebuild was the expensive option was wrong. The honest
+caveat is that per-block relief is also sub-pixel at overview (0.2 u = 0.27 px),
+so a geometry pass would buy per-block tone and missing-block silhouette
+nibbling, not visible depth -- and per-block tone has to exceed the +/-15%
+weathering already present to register at all.
+
+## Regressions and cost
+
+Unchanged, because the shipped file is unchanged: presets land exactly on target
+and distinct (Dawn 3.20/12 deg, Noon 4.50/75 deg, Golden 5.00/16 deg, Night
+0.68/41 deg), Cycle, Tour, orbit drag, wheel zoom, mobile touch orbit and the
+390x844 HUD all pass, no console or page errors, 52 meshes / 41 instanced /
+67,114 instances / 2.23M triangles / 35 programs, boot ~3.1 s.
+
+## Honest position
+
+100/100. The round moved nothing on screen. It did establish, with numbers, that
+the stated bottleneck is not present at overview distance, that four material
+levers cannot move it, and that the remaining route is geometry at a known and
+affordable cost. That is a useful result but it is not an improvement.
