@@ -252,25 +252,11 @@ function rawHeight(x, z) {
                         + 1.1 * (fbm(x * 0.13, z * 0.13, 2) - 0.5);
   let h = mix(dune, plat, sstep(-268, -214, x));
 
-  // escarpment down to the flood plain. The cliff line meanders in z and its
-  // steepness changes bay by bay. With the old dead-straight ramp every column
-  // in a row stepped down at exactly the same x, so the entire plateau front
-  // read as one continuous layer cake — the single worst artefact in the scene.
-  const emx = 7.0 * (fbm(z * 0.0068 + 4.4, 55.0, 3) - 0.5) * 2
-            + 2.6 * (fbm(z * 0.0225 + 19.0, 71.0, 2) - 0.5) * 2;
-  const ecx = 65 + emx;                                   // cliff mid-line
-  const ehw = 13.5 + 13.5 * fbm(z * 0.0105 + 31, 88.0, 2);  // half-width: cut face .. talus ramp
+  // escarpment down to the flood plain
   const valley = VALLEY_Y - 2.2 * sstep(84, 132, x) + 1.9 * (fbm(x * 0.03 + 3, z * 0.03 + 9, 3) - 0.5);
-  const e = s5step(ecx - ehw, ecx + ehw, x);
+  const e = s5step(42, 88, x);
   h = mix(h, valley, e);
   h += (1 - Math.abs(2 * e - 1)) * 3.4 * (fbm(x * 0.045 + 21, z * 0.045, 3) - 0.5);   // rocky terraces
-
-  // scree apron: the debris fan where the cut meets the plain, thickest below
-  // the steepest bays, so the cliff does not end on a clean drawn line
-  const efoot = ecx + ehw;
-  const tal = sstep(efoot + 32, efoot + 5, x) * sstep(efoot - 15, efoot + 2, x);
-  h += tal * (1.2 + 5.4 * Math.pow(fbm(x * 0.075 + 7, z * 0.075 + 43, 3), 1.7))
-           * (1.55 - 0.032 * ehw);
 
   // eastern desert beyond the far bank
   h = mix(h, duneHeight(x + 900, z), sstep(246, 316, x));
@@ -279,13 +265,6 @@ function rawHeight(x, z) {
   // drawing clean contour lines across the gentle slopes
   h += 1.55 * (fbm(x * 0.33 + 61, z * 0.33 + 17, 2) - 0.5);
   h += 2.60 * (fbm(x * 0.085 + 5, z * 0.085 + 91, 2) - 0.5);
-
-  // mega-ripples on the open sand: one prevailing wind direction, phase-warped
-  // so it never repeats, amplitude a little over one snap step so it survives
-  // quantisation and reads as combed sand rather than as noise
-  const rip = Math.sin(x * 0.196 + z * 0.118 + 5.4 * fbm(x * 0.011 + 71, z * 0.011 + 23, 2))
-            * (0.72 + 0.28 * Math.sin(x * 0.031 - z * 0.048 + 2.1));
-  h += rip * 0.92 * (sstep(-196, -250, x) + sstep(214, 246, x));
 
   // Nile channel
   const cx = riverCx(z), w = riverW(z);
@@ -864,14 +843,6 @@ function terrainColour(x, z, h, slope, out) {
   } else {                                                    // escarpment
     out.copy(COL_ROCK_DARK).lerp(COL_ROCK, clamp(0.45 + mottle * 1.5, 0, 1));
     out.lerp(COL_SILT_DARK, slope * 0.55);
-    // limestone bedding: bands of deliberately uneven thickness. Regular steps
-    // read as a quantisation artefact; uneven ones read as geology.
-    const bIdx = Math.floor(h * 0.185 + 2.4 * vnoise(h * 0.065, 13.0));
-    const bTone = vnoise(bIdx * 3.1 + 0.5, 41.0);
-    out.multiplyScalar(0.87 + 0.26 * bTone);
-    out.lerp(COL_GRAVEL, sstep(0.60, 0.96, bTone) * 0.30);
-    // near-vertical columns are freshly quarried faces: paler and drier
-    out.lerp(COL_ROCK, sstep(0.55, 0.95, slope) * 0.35);
   }
 
   // serir: wind-swept gravel plains where the sand has blown off entirely
@@ -1354,7 +1325,6 @@ function buildTemple(t, opts = {}) {
   // door reveal, jambs and a bright torus roll on each outer pylon corner are
   // what make it read as a portal — and the corner rolls give the mass an edge.
   const gh = pylonH * 0.56;
-  pushBox(stoneList, x1 - wall - 0.7, y + gh * 0.5, zm, 1.4, gh, gate - 0.3, LIME_D);   // dark reveal
   pushBox(stoneList, x1 - wall / 2, y + gh + 0.80, zm, wall * 1.08, 1.6, gate + 0.5, LIME_W);  // lintel
   cavettoCornice(x1 - wall + pt * 0.3, zm - gate / 2 - 0.2, x1 - pt * 0.3, zm + gate / 2 + 0.2,
                  y + gh + 1.6, LIME_W, 0.55);   // sized to stay clear of the pylon tops
