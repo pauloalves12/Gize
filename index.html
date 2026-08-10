@@ -562,13 +562,6 @@ const ATMO = {
   aerialNear:      { value: 330.0 },
   aerialCool:      { value: C(0x9FB4D8) },
   aerialCoolAmt:   { value: 0.0 },
-  // A pyramid course is 1.15 px tall from the overview pose (48 deg vertical
-  // fov, 470 px, ~385 units out) and the observed vertical repeat on the face
-  // is 2 px — the courses are being sampled at the Nyquist limit and the
-  // "regular banding" is the resulting alias. Every sub-pixel cue therefore
-  // has to fade out with distance instead of buzzing.
-  lodNear:         { value: 110.0 },
-  lodFar:          { value: 300.0 },
 };
 
 THREE.ShaderChunk.fog_pars_vertex = `
@@ -630,7 +623,6 @@ THREE.ShaderChunk.fog_fragment = `
 // cheap sin-free 3D value noise for per-fragment surface variation
 const DETAIL_GLSL = `
 uniform float uDetScale, uDetNormal, uDetRough, uDetTint, uDetBand;
-uniform float lodNear, lodFar;
 float dnHash(vec3 p){
   p = fract(p * 0.3183099 + vec3(0.11, 0.27, 0.43));
   p *= 17.0;
@@ -689,12 +681,10 @@ function patchMaterial(mat, detail, rim, masonry) {
       sh.uniforms.uWthY1 = { value: mz.wthY1 ?? 96.0 };
       sh.uniforms.uWthStain = { value: C(mz.stain ?? 0xEAD2A8) };
       sh.uniforms.uWthRunnel = { value: mz.runnel ?? 0.16 };
-      sh.uniforms.uWthZone = { value: mz.zone ?? 0.0 };
       sh.fragmentShader = sh.fragmentShader
         .replace('#include <common>', `#include <common>
           uniform float uMzH, uMzW, uMzSeam, uMzJoint, uMzVar;
           uniform float uWthVar, uWthAmt, uWthY0, uWthY1, uWthRunnel;
-          uniform float uWthZone;
           uniform vec3 uWthStain;`)
         .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
           {
@@ -712,12 +702,9 @@ function patchMaterial(mat, detail, rim, masonry) {
             float seam = min(min(inb.x, 1.0 - inb.x), min(inb.y, 1.0 - inb.y));
             float joint = 1.0 - smoothstep(0.0, uMzSeam, seam);
             float bh = dnHash(vec3(colx, row, 3.7));
-            // course-scale cues are sub-pixel past ~110 units: fade them out
-            // rather than let them alias into a hard 2 px stripe
-            float lod = mix(0.45, 1.0, 1.0 - smoothstep(lodNear, lodFar, vFogDepth));
-            diffuseColor.rgb *= 1.0 + (bh - 0.5) * uMzVar * lod;
-            diffuseColor.rgb *= 1.0 - joint * uMzJoint * lod;
-            roughnessFactor = clamp(roughnessFactor + joint * 0.20 * lod, 0.04, 1.0);
+            diffuseColor.rgb *= 1.0 + (bh - 0.5) * uMzVar;
+            diffuseColor.rgb *= 1.0 - joint * uMzJoint;
+            roughnessFactor = clamp(roughnessFactor + joint * 0.20, 0.04, 1.0);
 
             // large-scale weathering — the term that actually reads at distance
             float wLo = dnNoise(vFogWorld * 0.052);
@@ -728,23 +715,10 @@ function patchMaterial(mat, detail, rim, masonry) {
             // horizontal reading that the courses impose
             float rn = dnNoise(vec3(fc.x * 0.42, 3.0, 7.0));
             float rn2 = dnNoise(vec3(fc.x * 1.15, 9.0, 2.0));
-            // the 0.87 u component is sub-pixel at range, the 2.4 u one survives
-            float runnel = smoothstep(0.58, 0.92, rn) * 0.75
-                         + smoothstep(0.70, 0.97, rn2) * 0.25 * lod;
+            float runnel = smoothstep(0.58, 0.92, rn) * 0.75 + smoothstep(0.70, 0.97, rn2) * 0.25;
             diffuseColor.rgb *= 1.0 - runnel * uWthRunnel * (0.35 + 0.65 * low);
             roughnessFactor = clamp(roughnessFactor + runnel * 0.16, 0.04, 1.0);
             diffuseColor.rgb *= 1.0 + (blotch - 0.5) * uWthVar;
-
-            // Broad weathered panels at ~16 u (22 px at overview) and ~11 u
-            // (15 px). This is the band the eye can actually resolve at range,
-            // so it is where the "massive stone" read has to come from.
-            if (uWthZone > 0.001) {
-              float zLo = dnNoise(vFogWorld * 0.062 + 19.0);
-              float zMid = dnNoise(vFogWorld * 0.088 + 7.0);
-              float zone = smoothstep(0.40, 0.80, zLo * 0.65 + zMid * 0.35);
-              diffuseColor.rgb *= 1.0 - zone * uWthZone;
-              roughnessFactor = clamp(roughnessFactor + zone * 0.16, 0.04, 1.0);
-            }
             diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * uWthStain,
                                    clamp((blotch - 0.34) * 1.7, 0.0, 1.0) * low * uWthAmt);
             roughnessFactor = clamp(roughnessFactor + (blotch - 0.5) * 0.24, 0.04, 1.0);
@@ -761,20 +735,18 @@ function patchMaterial(mat, detail, rim, masonry) {
       .replace('#include <common>', '#include <common>\n' + DETAIL_GLSL)
       .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
         {
-          // grain sits at 0.77 u on the casing -- about one pixel at overview
-          float dLod = mix(0.45, 1.0, 1.0 - smoothstep(lodNear, lodFar, vFogDepth));
           vec3 dp = vFogWorld * uDetScale;
           float na = dnNoise(dp);
           vec3 pert = vec3(dnNoise(dp + vec3(1.7, 0.0, 0.0)) - na, 0.0,
                            dnNoise(dp + vec3(0.0, 0.0, 1.7)) - na);
           pert -= normal * dot(pert, normal);
-          normal = normalize(normal + pert * uDetNormal * dLod);
-          roughnessFactor = clamp(roughnessFactor + (na - 0.5) * uDetRough * dLod, 0.04, 1.0);
-          diffuseColor.rgb *= 1.0 + (na - 0.5) * uDetTint * dLod;
+          normal = normalize(normal + pert * uDetNormal);
+          roughnessFactor = clamp(roughnessFactor + (na - 0.5) * uDetRough, 0.04, 1.0);
+          diffuseColor.rgb *= 1.0 + (na - 0.5) * uDetTint;
           if (uDetBand > 0.001) {
             float stratum = dnHash(vec3(7.0, floor(vFogWorld.y / 0.625), 11.0));
             float stratum2 = dnHash(vec3(3.0, floor(vFogWorld.y / 2.5), 23.0));
-            diffuseColor.rgb *= 1.0 + ((stratum - 0.5) * 0.65 + (stratum2 - 0.5) * 0.35) * uDetBand * dLod;
+            diffuseColor.rgb *= 1.0 + ((stratum - 0.5) * 0.65 + (stratum2 - 0.5) * 0.35) * uDetBand;
           }
         }`);
   };
@@ -785,12 +757,10 @@ function patchMaterial(mat, detail, rim, masonry) {
 patchMaterial(matSand,   { scale: 0.42, normal: 0.20, rough: 0.16, tint: 0.17, band: 0.30 });
 patchMaterial(matStone,  { scale: 0.85, normal: 0.11, rough: 0.13, tint: 0.12 }, true,
               { h: 0.62, w: 1.30, seam: 0.070, joint: 0.24, vary: 0.130,
-                wthVar: 0.24, wthAmt: 0.50, wthY0: 8, wthY1: 52, stain: 0xE0C39A, runnel: 0.15,
-                zone: 0.085 });
+                wthVar: 0.24, wthAmt: 0.50, wthY0: 8, wthY1: 52, stain: 0xE0C39A, runnel: 0.15 });
 patchMaterial(matCasing, { scale: 1.30, normal: 0.06, rough: 0.10, tint: 0.055 }, true,
               { h: 0.80, w: 1.75, seam: 0.055, joint: 0.20, vary: 0.105,
-                wthVar: 0.30, wthAmt: 0.60, wthY0: 44, wthY1: 98, stain: 0xE6C79A, runnel: 0.20,
-                zone: 0.115 });
+                wthVar: 0.30, wthAmt: 0.60, wthY0: 44, wthY1: 98, stain: 0xE6C79A, runnel: 0.20 });
 patchMaterial(matGold,   null);
 patchMaterial(matVeg,    null);
 patchMaterial(matProp,   { scale: 1.10, normal: 0.09, rough: 0.12, tint: 0.11 });
@@ -1191,7 +1161,7 @@ function buildPyramid(p, baseY, courseH = 0.8, opts = {}) {
   const SAND_STAIN = C(0xC9B588), CORE = C(0xA89C84);
 
   const goldFrac = 0.075, goldBase = baseY + p.h * (1 - goldFrac);
-  let cy = baseY, ci = 0, tierEnd = 0, tierTone = 1.0;
+  let cy = baseY, ci = 0;
   while (cy < goldBase - 1e-4) {
     // deterministic course height, 0.58x to 1.52x nominal: this is what kills
     // the even striping, and the silhouette never notices
@@ -1200,18 +1170,10 @@ function buildPyramid(p, baseY, courseH = 0.8, opts = {}) {
     const t = (cy - baseY) / p.h;
     const s = p.b * (1 - t) + (pr() - 0.5) * 0.30;
     const jx = (pr() - 0.5) * 0.34, jz = (pr() - 0.5) * 0.34;
-    // Casing was laid in tiers: runs of courses quarried together share a tone.
-    // The old per-course tone used vnoise(ci * 0.71) and vnoise(ci * 0.83) —
-    // periods near 1.4 courses, so 1.6 px at overview and pure alias fodder.
-    // A 7-18 course tier is 8-21 px, the smallest horizontal structure the
-    // overview can actually resolve, so that is where the amplitude belongs.
-    if (ci >= tierEnd) {
-      tierEnd = ci + 7 + Math.floor(vnoise(ci * 0.29 + p.cx * 0.05, p.cz * 0.07) * 12);
-      tierTone = 0.962 + 0.076 * vnoise(tierEnd * 3.7 + p.cz * 0.11, p.cx * 0.13);
-    }
     const stain = 1 - sstep(0.0, 0.46, t);
     const col = new THREE.Color(LIME).lerp(SAND_STAIN, stain * 0.30);
-    col.multiplyScalar(tierTone + 0.030 * (vnoise(ci * 0.71, p.cz * 0.19) - 0.5));
+    col.multiplyScalar(0.945 + 0.055 * (vnoise(ci * 0.71, p.cz * 0.19) - 0.5) * 2
+                             + 0.075 * (vnoise(ci * 0.83, p.cx * 0.17) - 0.5));
     casingList.push({ x: p.cx + jx, y: cy + hh * 0.5, z: p.cz + jz,
                       sx: s, sy: hh * 1.03, sz: s, col });
     cy += hh; ci++;
