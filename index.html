@@ -206,6 +206,10 @@ for (const q of QUAYS) {
   pad({ x0: 126, x1: 150, z0: q.z0 - 4, z1: q.z1 + 4, y: BERTH_Y, feather: 8, occupy: false });
 }
 for (const v of VILLAGES) pad({ x0: v.x0 - 4, x1: v.x1 + 4, z0: v.z0 - 4, z1: v.z1 + 4, y: VALLEY_Y - 0.5, feather: 7 });
+// The great quarry: 65 x 64 u and 9 u deep, so 89 x 88 px of footprint with
+// 12 px walls at overview distance. A large negative form reads as strongly as a
+// large positive one and it is where Khufu's core blocks actually came from.
+pad({ x0: -24, x1: 40, z0: 88, z1: 152, y: PLATEAU_Y - 9.0, feather: 4, occupy: false });
 pad({ ...MARSH, y: MARSH_Y, feather: 14, occupy: false });
 for (const i of ISLANDS) pad({ x0: i.x0, x1: i.x1, z0: i.z0, z1: i.z1, y: i.y, feather: 11, occupy: false });
 
@@ -252,11 +256,20 @@ function rawHeight(x, z) {
                         + 1.1 * (fbm(x * 0.13, z * 0.13, 2) - 0.5);
   let h = mix(dune, plat, sstep(-268, -214, x));
 
-  // escarpment down to the flood plain
+  // escarpment down to the flood plain, cut as four great terraces. Treads run
+  // 12-20 u and risers 8-11 u, which at overview distance is 16-27 px of tread
+  // and 11-15 px of riser -- large enough to catch broad shadow and read as a
+  // monumental landform. Fine striping was proven invisible at this range; this
+  // is the same budget spent on four forms instead of seventy.
   const valley = VALLEY_Y - 2.2 * sstep(84, 132, x) + 1.9 * (fbm(x * 0.03 + 3, z * 0.03 + 9, 3) - 0.5);
-  const e = s5step(42, 88, x);
+  const eRaw = s5step(42, 88, x);
+  const TSTEPS = 4;
+  // the terrace line wanders a little in z so it is quarried, not machined
+  const eJit = eRaw + 0.045 * (fbm(z * 0.014 + 5, 33.0, 2) - 0.5);
+  const eIdx = Math.floor(eJit * TSTEPS), eFrac = eJit * TSTEPS - eIdx;
+  const e = clamp((eIdx + sstep(0.68, 1.0, eFrac)) / TSTEPS, 0, 1);
   h = mix(h, valley, e);
-  h += (1 - Math.abs(2 * e - 1)) * 3.4 * (fbm(x * 0.045 + 21, z * 0.045, 3) - 0.5);   // rocky terraces
+  h += (1 - Math.abs(2 * eRaw - 1)) * 2.2 * (fbm(x * 0.045 + 21, z * 0.045, 3) - 0.5);  // tread roughness
 
   // eastern desert beyond the far bank
   h = mix(h, duneHeight(x + 900, z), sstep(246, 316, x));
