@@ -681,10 +681,14 @@ function patchMaterial(mat, detail, rim, masonry) {
       sh.uniforms.uWthY1 = { value: mz.wthY1 ?? 96.0 };
       sh.uniforms.uWthStain = { value: C(mz.stain ?? 0xEAD2A8) };
       sh.uniforms.uWthRunnel = { value: mz.runnel ?? 0.16 };
+      sh.uniforms.uCzW = { value: mz.czW ?? 0.0 };
+      sh.uniforms.uCzVar = { value: mz.czVar ?? 0.0 };
+      sh.uniforms.uCzJoint = { value: mz.czJoint ?? 0.0 };
       sh.fragmentShader = sh.fragmentShader
         .replace('#include <common>', `#include <common>
           uniform float uMzH, uMzW, uMzSeam, uMzJoint, uMzVar;
           uniform float uWthVar, uWthAmt, uWthY0, uWthY1, uWthRunnel;
+          uniform float uCzW, uCzVar, uCzJoint;
           uniform vec3 uWthStain;`)
         .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
           {
@@ -703,6 +707,25 @@ function patchMaterial(mat, detail, rim, masonry) {
             float joint = 1.0 - smoothstep(0.0, uMzSeam, seam);
             float bh = dnHash(vec3(colx, row, 3.7));
             diffuseColor.rgb *= 1.0 + (bh - 0.5) * uMzVar;
+
+            // Coarse vertical articulation. The fine layer above is 1.75 u --
+            // 2.4 px at overview, sub-pixel, which is why it only ever aliased.
+            // 6 u lands at 8.2 px and actually resolves. Vertical only: no
+            // horizontal joint, so no false grid is painted over the 0.84 u
+            // courses. What reads at distance is the per-block tone, not the
+            // joint line (0.6 u is still under a pixel), so the tone carries the
+            // amplitude and is centred on zero to keep mean brightness intact.
+            if (uCzW > 0.001) {
+              float czBand = floor(fc.y / 2.5);
+              float czOff = dnHash(vec3(3.0, czBand, 9.0)) * uCzW;   // stagger
+              float czU = (fc.x + czOff) / uCzW;
+              float czCol = floor(czU), czIn = fract(czU);
+              float czSeam = min(czIn, 1.0 - czIn);
+              float czJoint = 1.0 - smoothstep(0.0, 0.08, czSeam);
+              diffuseColor.rgb *= 1.0 + (dnHash(vec3(czCol, czBand, 5.3)) - 0.5) * uCzVar;
+              diffuseColor.rgb *= 1.0 - czJoint * uCzJoint;
+              roughnessFactor = clamp(roughnessFactor + czJoint * 0.10, 0.04, 1.0);
+            }
             diffuseColor.rgb *= 1.0 - joint * uMzJoint;
             roughnessFactor = clamp(roughnessFactor + joint * 0.20, 0.04, 1.0);
 
@@ -757,10 +780,12 @@ function patchMaterial(mat, detail, rim, masonry) {
 patchMaterial(matSand,   { scale: 0.42, normal: 0.20, rough: 0.16, tint: 0.17, band: 0.30 });
 patchMaterial(matStone,  { scale: 0.85, normal: 0.11, rough: 0.13, tint: 0.12 }, true,
               { h: 0.62, w: 1.30, seam: 0.070, joint: 0.24, vary: 0.130,
-                wthVar: 0.24, wthAmt: 0.50, wthY0: 8, wthY1: 52, stain: 0xE0C39A, runnel: 0.15 });
+                wthVar: 0.24, wthAmt: 0.50, wthY0: 8, wthY1: 52, stain: 0xE0C39A, runnel: 0.15,
+                czW: 4.0, czVar: 0.055, czJoint: 0.06 });
 patchMaterial(matCasing, { scale: 1.30, normal: 0.06, rough: 0.10, tint: 0.055 }, true,
               { h: 0.80, w: 1.75, seam: 0.055, joint: 0.20, vary: 0.105,
-                wthVar: 0.30, wthAmt: 0.60, wthY0: 44, wthY1: 98, stain: 0xE6C79A, runnel: 0.20 });
+                wthVar: 0.30, wthAmt: 0.60, wthY0: 44, wthY1: 98, stain: 0xE6C79A, runnel: 0.20,
+                czW: 6.0, czVar: 0.075, czJoint: 0.07 });
 patchMaterial(matGold,   null);
 patchMaterial(matVeg,    null);
 patchMaterial(matProp,   { scale: 1.10, normal: 0.09, rough: 0.12, tint: 0.11 });
