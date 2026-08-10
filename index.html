@@ -690,12 +690,11 @@ function patchMaterial(mat, detail, rim, masonry) {
       sh.uniforms.uWthStain = { value: C(mz.stain ?? 0xEAD2A8) };
       sh.uniforms.uWthRunnel = { value: mz.runnel ?? 0.16 };
       sh.uniforms.uWthZone = { value: mz.zone ?? 0.0 };
-      sh.uniforms.uFlatten = { value: mz.flatten ?? 0.0 };
       sh.fragmentShader = sh.fragmentShader
         .replace('#include <common>', `#include <common>
           uniform float uMzH, uMzW, uMzSeam, uMzJoint, uMzVar;
           uniform float uWthVar, uWthAmt, uWthY0, uWthY1, uWthRunnel;
-          uniform float uWthZone, uFlatten;
+          uniform float uWthZone;
           uniform vec3 uWthStain;`)
         .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
           {
@@ -715,27 +714,10 @@ function patchMaterial(mat, detail, rim, masonry) {
             float bh = dnHash(vec3(colx, row, 3.7));
             // course-scale cues are sub-pixel past ~110 units: fade them out
             // rather than let them alias into a hard 2 px stripe
-            float lod = 1.0 - smoothstep(lodNear, lodFar, vFogDepth);
+            float lod = mix(0.45, 1.0, 1.0 - smoothstep(lodNear, lodFar, vFogDepth));
             diffuseColor.rgb *= 1.0 + (bh - 0.5) * uMzVar * lod;
             diffuseColor.rgb *= 1.0 - joint * uMzJoint * lod;
             roughnessFactor = clamp(roughnessFactor + joint * 0.20 * lod, 0.04, 1.0);
-
-            // The stripe is geometric too: every course top is a +Y facet lit
-            // differently from the vertical face beside it. At distance let the
-            // tops shade like the face they belong to — which is exactly what a
-            // mip-mapped normal map would do. The outward horizontal direction
-            // is approximated by the horizontal view vector, valid on precisely
-            // the faces whose tops are actually visible.
-            if (uFlatten > 0.001) {
-              float topness = smoothstep(0.55, 0.92, abs(mzN.y));
-              float conv = topness * (1.0 - lod) * uFlatten;
-              if (conv > 0.001) {
-                vec3 outw = normalize(vec3(cameraPosition.x - vFogWorld.x, 0.0,
-                                           cameraPosition.z - vFogWorld.z));
-                vec3 nW = normalize(mix(mzN, outw, conv * 0.85));
-                normal = normalize((viewMatrix * vec4(nW, 0.0)).xyz);
-              }
-            }
 
             // large-scale weathering — the term that actually reads at distance
             float wLo = dnNoise(vFogWorld * 0.052);
@@ -780,7 +762,7 @@ function patchMaterial(mat, detail, rim, masonry) {
       .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
         {
           // grain sits at 0.77 u on the casing -- about one pixel at overview
-          float dLod = 1.0 - smoothstep(lodNear, lodFar, vFogDepth);
+          float dLod = mix(0.45, 1.0, 1.0 - smoothstep(lodNear, lodFar, vFogDepth));
           vec3 dp = vFogWorld * uDetScale;
           float na = dnNoise(dp);
           vec3 pert = vec3(dnNoise(dp + vec3(1.7, 0.0, 0.0)) - na, 0.0,
@@ -804,11 +786,11 @@ patchMaterial(matSand,   { scale: 0.42, normal: 0.20, rough: 0.16, tint: 0.17, b
 patchMaterial(matStone,  { scale: 0.85, normal: 0.11, rough: 0.13, tint: 0.12 }, true,
               { h: 0.62, w: 1.30, seam: 0.070, joint: 0.24, vary: 0.130,
                 wthVar: 0.24, wthAmt: 0.50, wthY0: 8, wthY1: 52, stain: 0xE0C39A, runnel: 0.15,
-                zone: 0.085, flatten: 0.55 });
+                zone: 0.085 });
 patchMaterial(matCasing, { scale: 1.30, normal: 0.06, rough: 0.10, tint: 0.055 }, true,
               { h: 0.80, w: 1.75, seam: 0.055, joint: 0.20, vary: 0.105,
                 wthVar: 0.30, wthAmt: 0.60, wthY0: 44, wthY1: 98, stain: 0xE6C79A, runnel: 0.20,
-                zone: 0.115, flatten: 1.0 });
+                zone: 0.115 });
 patchMaterial(matGold,   null);
 patchMaterial(matVeg,    null);
 patchMaterial(matProp,   { scale: 1.10, normal: 0.09, rough: 0.12, tint: 0.11 });
@@ -1209,7 +1191,7 @@ function buildPyramid(p, baseY, courseH = 0.8, opts = {}) {
   const SAND_STAIN = C(0xC9B588), CORE = C(0xA89C84);
 
   const goldFrac = 0.075, goldBase = baseY + p.h * (1 - goldFrac);
-  let cy = baseY, ci = 0;
+  let cy = baseY, ci = 0, tierEnd = 0, tierTone = 1.0;
   while (cy < goldBase - 1e-4) {
     // deterministic course height, 0.58x to 1.52x nominal: this is what kills
     // the even striping, and the silhouette never notices
@@ -1218,10 +1200,18 @@ function buildPyramid(p, baseY, courseH = 0.8, opts = {}) {
     const t = (cy - baseY) / p.h;
     const s = p.b * (1 - t) + (pr() - 0.5) * 0.30;
     const jx = (pr() - 0.5) * 0.34, jz = (pr() - 0.5) * 0.34;
+    // Casing was laid in tiers: runs of courses quarried together share a tone.
+    // The old per-course tone used vnoise(ci * 0.71) and vnoise(ci * 0.83) —
+    // periods near 1.4 courses, so 1.6 px at overview and pure alias fodder.
+    // A 7-18 course tier is 8-21 px, the smallest horizontal structure the
+    // overview can actually resolve, so that is where the amplitude belongs.
+    if (ci >= tierEnd) {
+      tierEnd = ci + 7 + Math.floor(vnoise(ci * 0.29 + p.cx * 0.05, p.cz * 0.07) * 12);
+      tierTone = 0.962 + 0.076 * vnoise(tierEnd * 3.7 + p.cz * 0.11, p.cx * 0.13);
+    }
     const stain = 1 - sstep(0.0, 0.46, t);
     const col = new THREE.Color(LIME).lerp(SAND_STAIN, stain * 0.30);
-    col.multiplyScalar(0.945 + 0.055 * (vnoise(ci * 0.71, p.cz * 0.19) - 0.5) * 2
-                             + 0.075 * (vnoise(ci * 0.83, p.cx * 0.17) - 0.5));
+    col.multiplyScalar(tierTone + 0.030 * (vnoise(ci * 0.71, p.cz * 0.19) - 0.5));
     casingList.push({ x: p.cx + jx, y: cy + hh * 0.5, z: p.cz + jz,
                       sx: s, sy: hh * 1.03, sz: s, col });
     cy += hh; ci++;
