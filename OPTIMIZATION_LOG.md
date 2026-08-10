@@ -292,3 +292,117 @@ here, so "no performance regression" is not a claim I can support on mobile.
 4. The detail metric — adjacent-pixel luminance difference at 240 px — cannot see
    features finer than roughly three world units at overview distance, which is
    exactly why the masonry failure was hard to catch numerically.
+
+# Round 3 — evidence-first, mostly reverted
+
+Target was 125-135 against the previous state as 100. It landed near 105, and
+most of what I built in this round is not in the file any more. What follows is
+what happened, not what I hoped for.
+
+## Method change that made the difference
+
+The previous rounds measured whole-frame luminance stdev and adjacent-pixel
+difference. Both are blind to periodic striping and to between-region depth, so
+this round added targeted instruments — and three of them ended up refuting my
+own work rather than confirming it:
+
+  banding        row-mean luminance autocorrelation, lags 2-24, inside a crop
+  edge coherence how far a horizontal edge stays correlated along x
+  edge waviness  spread of the strongest edge's y position after removing tilt
+  depth          near-crop minus far-crop contrast and saturation
+
+Baseline for the round: ccf0cc8, captured as an 8-view set.
+
+## Kept
+
+1. Variable pyramid course heights, 0.58x to 1.52x nominal, with taper following
+   height rather than course index. Casing-face banding on the close pose:
+   78.6 -> 64.7, a 17.6% reduction, and visible at 3.2x as courses that no longer
+   march at one pitch. Honest limit: at 400 units it does nothing — the same
+   crops read +0.1%, -0.6%, +1.4%. The brief asked for a better read *at
+   distance*; this is not that.
+2. Vertical erosion runnels in the masonry shader, breaking the horizontal
+   reading the courses impose.
+3. Aerial perspective: local contrast compressed toward the region mean plus a
+   per-preset cool cast. Saturation-depth improved at every preset — dawn
+   -5.6 -> -3.4, golden -6.4 -> -3.7, night -22.2 -> -20.7, close -5.1 -> -3.4.
+   Contrast-depth is mixed. Modest, and it is now the only depth mechanism.
+4. Six palm archetypes — mature, young, old-and-tall, wind-leaned, forked doum,
+   dead stump — chosen by ground wetness so age correlates with site. Visibly
+   more varied in every matched view. Costs +6 draw calls at equal instance
+   count. This was the weakest category and it is now merely weak.
+5. Temple gateway framing: lintel, bright jambs, gold winged-disc band, and a
+   torus roll following the batter on each outer pylon corner. Verified with a
+   purpose-built head-on capture of the Khafre valley temple front.
+
+## Reverted, with the evidence
+
+1. Far horizon ridge, twice. v1 was widely spaced tall slabs: the plateau hid
+   their feet from every eastern viewpoint, so only the tops showed and it read
+   as blocks floating in the sky. v2 was continuous and low, and read as a picket
+   fence of posts over the plateau edge. It also faked two metrics I had been
+   treating as gains — whole-frame detail rose on high-frequency sky edges in the
+   gaps (4.93 -> 5.32, falling back to 4.96 once removed), and golden-hour
+   contrast-depth crashed from -4.0 to -15.2 because a hard silhouette inside the
+   far crop injects exactly the contrast distance should remove.
+2. The whole terrain pass: meandering cliff line, per-bay cut steepness, scree
+   apron, wind mega-ripples, uneven limestone bedding. Four instruments, no
+   support — banding -0.1% to -3.1% (noise), edge coherence *worse* at dawn
+   +8.0% and noon +5.4%, waviness mixed with right-hand crops -12% to -16%, and
+   at matched 3x the cliff read coarser and blockier rather than better. Widening
+   the cut made each ledge thicker, hence longer and cleaner: the opposite of the
+   intent. rawHeight and terrainColour are byte-identical to ccf0cc8 again. The
+   ripples never had a chance regardless — the dune field they modulate is
+   off-camera from every pose in the set.
+3. The gateway's recessed reveal block. It read as masonry bricking the doorway
+   shut: the baseline lets you see through the gate into the court, my version
+   walled it up. LIME_D is far too light to pass as shadowed depth at that scale.
+   The framing stayed, the block went.
+
+## Four flaws found in my own measurement rig
+
+1. Row-mean banding autocorrelation averages over x, so a meandering cliff still
+   scores as strongly periodic. It cannot see the change it was chosen to judge.
+2. The first perf script measured mid-boot and reported 14-second frames — that
+   was the terrain build blocking the main thread, not a frame time.
+3. Then I "fixed" the loader wait to require the .gone class. The loader is
+   removed from the DOM 900 ms later, so the stricter check can never pass and
+   timed out at 400 s. The original null-tolerant check was correct.
+4. Preset probes clicked the HUD button, which uses the 1.8 s crossfade, while
+   dt = min(getDelta(), 0.05) clamps only the upper bound. Under software
+   rendering the effective dt was about 4 ms, so 150 frames left the blend a third
+   done and all four presets read alike near Golden Hour's 5.0. Two separate
+   "NOT DISTINCT" verdicts came from this, on different pairs, because each read
+   was a snapshot of a moving blend. Re-tested through gotoPreset(i, 0.01), all
+   four land exactly on their defined values.
+
+## Performance
+
+Structural cost, measured the same way on both builds:
+
+                    ccf0cc8    7ef46b1
+  meshes                 46         52
+  draw calls (inst.)     35         41   +6, the palm archetypes
+  instances          66,966     67,114   +148 gate boxes, existing mesh
+  triangles           2.27M      2.23M   -1.8%
+  programs               35         35   cache keys still correct
+  boot                2793ms     2864ms  +2.5%, noise
+
+Triangles fell because taller average courses mean fewer of them, which more
+than pays for the gate detail. Frame timing is still not measurable here and I
+am not going to quote a swiftshader millisecond figure as if it meant something.
+
+## Regressions
+
+All four presets latch and land on their defined values; Cycle, Tour, orbit
+drag, wheel zoom, mobile touch orbit and the 390x844 HUD fit all pass; no
+console or page errors; 35 programs compile.
+
+## Honest position
+
+Roughly 105/100, not 125-135. The one thing the brief put first — pyramids
+reading as even bands at viewing distance — is untouched, because the cause is
+one box per course and the fix I tried helps only close up. The terrain and
+horizon work, which was most of the round's effort, produced nothing measurable
+and was removed. What survives is three modest, verified gains and one regression
+of my own making caught and removed before shipping.
