@@ -1483,6 +1483,66 @@ function buildMastabas() {
   }
 }
 
+/* ---- 7h-quater. pyramid podiums ----------------------------------------
+   Macro architecture, and the only kind that survives at overview distance: a
+   5 u ring reads as 7 px of height but its run is several hundred px and the
+   shadow it throws is what stages the monument. Each pyramid gains a stepped
+   platform so it rises out of built ground instead of emerging from open sand.
+   The ring is self-policing -- any segment overlapping a temple, a queen's
+   pyramid, a neighbouring pyramid, a mastaba field or a causeway is skipped, so
+   nothing gets buried. */
+const PODIUM_KEEPOUT = [];
+for (const m of MORTUARY) PODIUM_KEEPOUT.push({ x0: m.x0 - 2, x1: m.x1 + 2, z0: m.z0 - 2, z1: m.z1 + 2 });
+for (const q of QUEENS) PODIUM_KEEPOUT.push({ x0: q.cx - q.b / 2 - 3, x1: q.cx + q.b / 2 + 3,
+                                              z0: q.cz - q.b / 2 - 3, z1: q.cz + q.b / 2 + 3 });
+for (const f of MASTABA_FIELDS) PODIUM_KEEPOUT.push({ x0: f.x0 - 2, x1: f.x1 + 2, z0: f.z0 - 2, z1: f.z1 + 2 });
+for (const c of CAUSEWAYS) PODIUM_KEEPOUT.push({ x0: c.x0 - 4, x1: c.x1 + 4, z0: c.z0 - 5, z1: c.z1 + 5 });
+for (const p of [KHUFU, KHAFRE, MENKAURE]) PODIUM_KEEPOUT.push({
+  x0: p.cx - p.b / 2 - 3, x1: p.cx + p.b / 2 + 3, z0: p.cz - p.b / 2 - 3, z1: p.cz + p.b / 2 + 3, self: p });
+
+function podiumBlocked(x, z, w, self) {
+  for (const k of PODIUM_KEEPOUT) {
+    if (k.self === self) continue;
+    if (x + w / 2 > k.x0 && x - w / 2 < k.x1 && z + w / 2 > k.z0 && z - w / 2 < k.z1) return true;
+  }
+  return false;
+}
+
+function buildPodiums() {
+  let n = 0;
+  for (const p of [KHUFU, KHAFRE, MENKAURE]) {
+    const half = p.b / 2, baseY = PLATEAU_Y - 0.3;
+    const pr = mulberry32(((p.cx * 40503) ^ (p.cz * 12289) ^ 0x50D1) >>> 0);
+    // two steps: a broad lower apron and a narrower upper course
+    for (const [out, top, pitch] of [[10.5, 3.0, 3.0], [5.0, 5.4, 3.0]]) {
+      const reach = half + out;
+      for (let a = -reach; a < reach; a += pitch) {
+        const mid = a + pitch / 2;
+        // runs along x carry width in x and depth in z; runs along z swap them,
+        // otherwise the east and west sides come out rotated and leave gaps
+        const sides = [
+          { sx: mid, sz: -reach + out / 2, wx: pitch, wz: out },
+          { sx: mid, sz: reach - out / 2, wx: pitch, wz: out },
+          { sx: -reach + out / 2, sz: mid, wx: out, wz: pitch },
+          { sx: reach - out / 2, sz: mid, wx: out, wz: pitch },
+        ];
+        for (const sd of sides) {
+          const wx = p.cx + sd.sx, wz = p.cz + sd.sz;
+          if (Math.abs(sd.sx) < half - 1 && Math.abs(sd.sz) < half - 1) continue;  // under the pyramid
+          if (podiumBlocked(wx, wz, Math.max(sd.wx, sd.wz), p)) continue;
+          if (sampleH(wx, wz) < PLATEAU_Y - 8) continue;                 // never float off the edge
+          const shade = 0.93 + pr() * 0.13;
+          pushBox(stoneList, wx, baseY + top * 0.5 - 1.0, wz,
+                  sd.wx * 1.04, top + 2.0, sd.wz * 1.04,
+                  new THREE.Color(LIME_D).multiplyScalar(shade).getHex());
+          n++;
+        }
+      }
+    }
+  }
+  return n;
+}
+
 /* ---- 7i. assemble the plateau ------------------------------------------ */
 function buildMonuments() {
   buildPyramid(KHUFU, PLATEAU_Y - 0.3, 0.8, { entrance: true });
@@ -1503,6 +1563,7 @@ function buildMonuments() {
   buildEnclosure(SPHINX_PAD, SPHINX_Y);
   buildQuays();
   buildMastabas();
+  buildPodiums();
 
   // stela between the Sphinx's paws
   pushBox(stoneList, 80.5, SPHINX_Y + 1.9, -24, 0.9, 3.8, 3.0, GRAN_R);
