@@ -693,3 +693,96 @@ Identical in every figure, as a camera-only change must be. Boot has ranged
 - Only two of the three main pyramids are in the portrait frame; Menkaure is out.
 - The mud-brick village sits partly behind the control bar at noon.
 - The golden-hour lower third is quite dark.
+
+# Round 7 — cinematic lighting: one clear win, one solid, one marginal, one correctly left alone
+
+Scope was light, atmosphere and value structure only. No geometry, no camera, no
+new passes. The portrait camera from round 6 stayed locked throughout.
+
+## The diagnosis that drove everything
+
+fill/key -- (hemi + fill) / sun -- is form readability as a number. Low is
+sculpted, high is flat:
+
+  preset          fill/key   sun elev   shadow length
+  Dawn              0.447     12.4 deg      4.54x
+  High Noon         0.422     74.8 deg      0.27x
+  Golden Hour       0.226     16.3 deg      3.43x
+  Starry Night      1.118     41.3 deg      1.14x
+
+Night's ambient was BRIGHTER than its moon. That single number explains why the
+preset read as "day x darkness" rather than as a lit scene, and it was the
+largest available win in the loop.
+
+## Kept
+
+Night, the clear win. Moon 41 -> 28 deg for raking light, key 0.68 -> 0.95,
+hemi 0.50 -> 0.30, fill 0.26 -> 0.14, so fill/key 1.118 -> 0.463, and fog
+desaturated 0x0A1230 -> 0x111A34 against a measured far-region saturation of 72.6.
+Desktop: the escarpment now catches raking moonlight with legible terraces and the
+pyramids show distinct lit and shadow faces. Portrait 390x844: monument band
+luminance 79.1 -> 90.5, contrast 42.8 -> 45.5.
+
+Dawn, a solid win. Ambient cut, fill/key 0.447 -> 0.319, and the warm scattering
+pulled back: fogSunStr 1.10 -> 0.58, haze 0.62 -> 0.42, hazeCol -> 0xD9C4C6.
+Near-band R/B 1.45 -> 1.20 while the sunlit midground held at 1.81, so warm/cool
+separation went 1.24 -> 1.51. Warm key against cool air, which is what makes dawn
+read as dawn instead of as a second golden hour.
+
+Noon, marginal. fill/key 0.422 -> 0.279, key 4.5 -> 4.8 slightly warmed, haze
+0.28 -> 0.20 because the horizon was bleaching to L=205. Near saturation
+29.8 -> 33.3, mid 9.6 -> 11.4, contrast up, cliff slightly better defined. Real
+but subtle.
+
+## Reverted
+
+All of Golden Hour. Two attempts, and the second explained the first.
+
+  attempt 1  hemiGnd 0x8A5A48 -> 0xA06E54, fogGround 2.6 -> 2.0, fill hue
+             desaturated. No visible change, and near-band luminance went
+             66.3 -> 64.8 -- DARKER, the opposite of the intent.
+  attempt 2  fogGround 2.6 -> 3.3. Lifted near-band luminance to 70.3, and was
+             completely invisible at matched framing.
+
+Two wrong models were behind them. Ground haze was LIFTING the valley, so cutting
+fogGround darkened it. And hemiGnd cannot lift an up-facing valley floor at all,
+because up-facing surfaces are lit by hemiSky.
+
+The deeper error was treating Golden Hour as broken. Its fill/key of 0.226 is
+already the strongest of the four, which is why it reads as the hero. The "near
+contrast below mid" reading I called inverted aerial perspective is not a defect
+either: with the sun at 16 deg behind the plateau, the valley IS in shadow and the
+sunlit escarpment IS the highest-contrast band. That is correct lighting. Golden
+Hour ends the round byte-identical to where it started.
+
+## An instrument lesson
+
+I first judged dawn's cooling by SATURATION and concluded it had failed --
+near saturation fell 32.1 -> 23.2, which looks like washing out. R/B ratio showed
+the opposite: the near band had genuinely cooled while the sunlit band stayed
+warm. Saturation change and colour-temperature change are different things, and I
+had picked the metric that could not see the intent.
+
+## Performance
+
+  before  52 meshes / 41 instanced / 67,104 instances / 2.23M tris / 35 programs
+  after   52 meshes / 41 instanced / 67,104 instances / 2.23M tris / 35 programs
+
+Identical in every figure. Preset scalars only: no new textures, render targets,
+passes or shader programs. Boot has ranged 2.79-4.23 s across this session, so the
+3.45 -> 4.23 s reading is variance, not cost.
+
+## Regressions
+
+All four presets land exactly on their defined values and stay distinct
+(Dawn 3.20/12 deg, Noon 4.80/75 deg, Golden 5.00/16 deg, Night 0.95/28 deg).
+Cycle, Tour, orbit drag, wheel zoom, mobile touch orbit and the 390x844 HUD all
+pass. No console or page errors. The locked portrait camera is untouched -- the
+unchanged-preset control compares at mean|diff| 3.01, below the animation floor.
+
+## Position
+
+About 107/100, against a 115-125 target. Night is genuinely transformed, dawn now
+has a real warm/cool structure, noon is slightly firmer, and Golden Hour needed
+nothing. Two of the four presets moved meaningfully; that is a real but modest
+result and I am not going to describe it as more.
