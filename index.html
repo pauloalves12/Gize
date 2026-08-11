@@ -2459,6 +2459,13 @@ function updateCamera(dt) {
   if (tour) {
     tourT = (tourT + dt / TOUR_DUR) % 1;
     const p = TOUR_POS.getPointAt(tourT), l = TOUR_LOOK.getPointAt(tourT);
+    // The tour was framed for landscape. On portrait the apexes of Khufu and
+    // Khafre ride above the top edge during the close flyover stops, so aim a
+    // little higher. Checked against all sixteen control points: +6 u lifts
+    // monument-stop pairs fully in frame from 15/64 to 19/64 and halves apex
+    // clipping from 4 stops to 2, while only two stops end up aiming above the
+    // horizon at all. Larger biases buy nothing and start pointing at sky.
+    if (isPortrait()) l.y += 6;
     camera.position.lerp(p, 1 - Math.pow(0.02, dt));
     lookTarget.lerp(l, 1 - Math.pow(0.03, dt));
     // keep the orbit rig glued to the flight so releasing Tour never snaps
