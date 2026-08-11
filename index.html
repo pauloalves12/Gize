@@ -415,6 +415,21 @@ scene.fog = new THREE.FogExp2(0xE09A5A, 0.0018);
 const camera = new THREE.PerspectiveCamera(48, innerWidth / innerHeight, 0.6, 14000);
 camera.position.set(341, 121, -109);
 
+/* Portrait framing. three.js fov is vertical, so on a 390x844 phone the
+   HORIZONTAL field collapses to 23 deg while the vertical stays at 48: the frame
+   becomes a telephoto crop of the desktop composition, covering 158 u of width
+   against a monument group roughly 300 u across. Half the plateau, and most of
+   the terraced escarpment, simply falls outside. Portrait therefore gets its own
+   vertical fov and its own default pose -- same authored viewpoint, recomposed
+   for the aspect ratio. Landscape and desktop are untouched. */
+const FOV_LANDSCAPE = 48, FOV_PORTRAIT = 58, PORTRAIT_AR = 0.75;
+const isPortrait = () => innerWidth / innerHeight < PORTRAIT_AR;
+function applyFov() {
+  const f = isPortrait() ? FOV_PORTRAIT : FOV_LANDSCAPE;
+  if (camera.fov !== f) { camera.fov = f; camera.updateProjectionMatrix(); }
+}
+applyFov();
+
 // water-plane clipping used only by the reflection pass (kept resident so the
 // clipping-plane count never changes → no per-frame shader recompiles)
 const clipPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 1e6);
@@ -2345,6 +2360,15 @@ const orbit = {
   dist: 400, tDist: 400, theta: 1.800, tTheta: 1.800, phi: 1.3614, tPhi: 1.3614,
   idle: 0, auto: 0.0075,
 };
+// Portrait recomposition: aim a little lower so the horizon rises and the sky
+// stops taking 44% of the frame, drop the camera slightly and pull the target
+// south so all three pyramids clear the frame edges with breathing room, and let
+// the wider portrait fov carry the terraced escarpment into the middle band.
+if (isPortrait()) {
+  orbit.target.set(-40, 34, -30); orbit.tTarget.copy(orbit.target);
+  orbit.phi = orbit.tPhi = 1.450;
+  orbitPose(camera.position);            // no damped swing on the first frame
+}
 const lookTarget = new THREE.Vector3().copy(orbit.target);
 let tour = false, tourT = 0;
 const TOUR_DUR = 62;
@@ -2542,6 +2566,7 @@ function setupComposer() {
 
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
+  applyFov();
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
   if (composer) composer.setSize(innerWidth, innerHeight);
