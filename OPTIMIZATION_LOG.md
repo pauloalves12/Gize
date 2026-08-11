@@ -599,3 +599,97 @@ A real gain, and the first in three loops. Roughly 108-112 against the round-4
 state of 100 -- driven almost entirely by the escarpment terraces at overview
 distance, with a small consistent contribution from the dune horizon. Not
 transformative, and it does not touch mobile portrait.
+
+# Round 6 — mobile portrait composition: a camera problem, not a world problem
+
+Round 5's escarpment terraces were the best gain the project has had, and mobile
+portrait could not see them. This round fixed the framing, not the world. No
+geometry, textures, passes or render targets were touched.
+
+## The diagnosis
+
+three.js PerspectiveCamera fov is VERTICAL, so portrait holds the 48 deg vertical
+field and lets the horizontal field collapse:
+
+  1920x1080  h-fov 76.7 deg   609 u of width at 385 u
+  820x470    h-fov 75.7 deg   598 u
+  844x390    h-fov 87.9 deg   742 u
+  390x844    h-fov 23.3 deg   158 u
+  412x915    h-fov 22.7 deg   154 u
+  430x932    h-fov 23.2 deg   158 u
+
+The monument group spans about 300 u, Menkaure at x -180 to the valley temples at
+x +120. Portrait saw 158 u of it -- a 23 deg telephoto slice, literally the
+desktop composition cropped vertically, which is the exact failure the brief
+names. Neither lever fixes it alone: 66 deg vertical only reaches 231 u and starts
+to distort, and retreating to 780 u covers 321 u but shrinks the pyramids to
+nothing.
+
+## What was kept
+
+Portrait, gated on aspect < 0.75, so landscape and desktop take the old path:
+
+  fov 56 (landscape stays 48), following device rotation via the resize handler
+  target (-70, 34, -20), dist 300, theta 2.100, phi 1.440, snapped on frame one
+  tour look target lifted +8 u
+
+The winning idea is to look ALONG the Khufu-Khafre axis rather than across the
+group. Spread sideways the pair needs ~194 u of width; seen along their own axis
+they overlap in depth, so one frame holds both at full height from 300 u out --
+larger and uncropped at once, with the recession doing the depth work a tall frame
+is good at.
+
+## Measured, 390x844 golden, before -> after
+
+  sky              36.0% -> 34.6%
+  vegetation       14.8% ->  0.7%
+  water             3.5% -> 12.4%
+  pyramids       2 clipped -> 2 complete and substantially larger
+  terraces        present but confused -> legible banded mass in the lower third
+  HUD masonry       0.3% ->  0.3% golden, 37.3% noon (the village, not a monument)
+
+Tour framing, checked analytically at all sixteen control points against the
+portrait frustum: 12/64 monument-stop pairs fully in frame at the old fov, 14/64
+at fov 56, 16/64 with the +8 u look bias, and apex clipping down from 5 stops to 2.
+Verified geometrically rather than visually -- reaching t=0.75 for a screenshot
+needs roughly 930 rendered frames under software rendering.
+
+## Tested and rejected
+
+  P1 fov 60 only          safe, but the middle third stays busy
+  P2 wide + back          pyramids shrink into an 85% rock band
+  P3 axial                flat; foreground dominates
+  P4 pyramid diagonal     real depth, but the quarry mass takes over
+  P5 back + high          worst; 87% rock, apex clearance collapses to 15 px
+  P6 close + low          strong read but sky reaches 43.7%
+  P8 (shipped briefly)    fixed legibility but paid in pyramid size
+  Q2                      biggest pyramids of all, but its lower 40% is a
+                          featureless dark rock mass
+
+## Desktop regression
+
+Settled with a noise floor rather than by argument, after one wrong-reference
+scare (D_base predates round 5's terraces, so it is not a valid desktop baseline):
+
+  same build, two consecutive captures   rock/masonry mean|diff| 4.45
+  desktop before vs after this loop      rock/masonry mean|diff| 4.26
+
+Below the floor, so desktop is unchanged. The larger diffs sit in animated water
+and bloom, 23.91 against a 20.66 floor.
+
+## Performance
+
+  before  52 meshes / 41 instanced / 67,104 instances / 2.23M tris / 35 programs
+  after   52 meshes / 41 instanced / 67,104 instances / 2.23M tris / 35 programs
+
+Identical in every figure, as a camera-only change must be. Boot has ranged
+2.79-3.88 s across all runs this session; 3.45 s here is inside that variance.
+
+## Honest limitations
+
+- The lush green Nile foreground largely leaves the portrait frame, 14.8% to 0.7%.
+  Portrait trades the green-riverbank-versus-white-limestone contrast the original
+  brief asked for in exchange for monumentality. Landscape and desktop keep it.
+- Only two of the three main pyramids are in the portrait frame; Menkaure is out.
+- The mud-brick village sits partly behind the control bar at noon.
+- The golden-hour lower third is quite dark.
