@@ -422,7 +422,7 @@ camera.position.set(341, 121, -109);
    the terraced escarpment, simply falls outside. Portrait therefore gets its own
    vertical fov and its own default pose -- same authored viewpoint, recomposed
    for the aspect ratio. Landscape and desktop are untouched. */
-const FOV_LANDSCAPE = 48, FOV_PORTRAIT = 58, PORTRAIT_AR = 0.75;
+const FOV_LANDSCAPE = 48, FOV_PORTRAIT = 56, PORTRAIT_AR = 0.75;
 const isPortrait = () => innerWidth / innerHeight < PORTRAIT_AR;
 function applyFov() {
   const f = isPortrait() ? FOV_PORTRAIT : FOV_LANDSCAPE;
@@ -2365,8 +2365,17 @@ const orbit = {
 // south so all three pyramids clear the frame edges with breathing room, and let
 // the wider portrait fov carry the terraced escarpment into the middle band.
 if (isPortrait()) {
-  orbit.target.set(-40, 34, -30); orbit.tTarget.copy(orbit.target);
-  orbit.phi = orbit.tPhi = 1.450;
+  // Look along the Khufu-Khafre axis instead of across the group. Spread
+  // sideways, the two great pyramids need ~194 u of width, which a 26 deg
+  // portrait field can only fit by retreating until they are small. Seen along
+  // their own axis they overlap in depth, so the same frame holds both at full
+  // height from 300 u out -- larger AND uncropped, with the recession doing the
+  // depth work a tall frame is good at. The causeway stair then runs in as a
+  // leading line, and the terraced escarpment fills the lower band.
+  orbit.target.set(-70, 34, -20); orbit.tTarget.copy(orbit.target);
+  orbit.dist = orbit.tDist = 300;
+  orbit.theta = orbit.tTheta = 2.100;
+  orbit.phi = orbit.tPhi = 1.440;
   orbitPose(camera.position);            // no damped swing on the first frame
 }
 const lookTarget = new THREE.Vector3().copy(orbit.target);
@@ -2459,13 +2468,13 @@ function updateCamera(dt) {
   if (tour) {
     tourT = (tourT + dt / TOUR_DUR) % 1;
     const p = TOUR_POS.getPointAt(tourT), l = TOUR_LOOK.getPointAt(tourT);
-    // The tour was framed for landscape. On portrait the apexes of Khufu and
-    // Khafre ride above the top edge during the close flyover stops, so aim a
-    // little higher. Checked against all sixteen control points: +6 u lifts
-    // monument-stop pairs fully in frame from 15/64 to 19/64 and halves apex
-    // clipping from 4 stops to 2, while only two stops end up aiming above the
-    // horizon at all. Larger biases buy nothing and start pointing at sky.
-    if (isPortrait()) l.y += 6;
+    // The tour was framed for landscape; on portrait the apexes of Khufu and
+    // Khafre ride above the top edge during the close flyover stops. Checked at
+    // all sixteen control points against the portrait frustum at fov 56:
+    //   +6 u  -> 15/64 in frame, 3 stops clipping, 2 aiming above the horizon
+    //   +8 u  -> 16/64 in frame, 2 stops clipping, 4 aiming above the horizon
+    // Anything past +8 buys nothing and only tips more stops skyward.
+    if (isPortrait()) l.y += 8;
     camera.position.lerp(p, 1 - Math.pow(0.02, dt));
     lookTarget.lerp(l, 1 - Math.pow(0.03, dt));
     // keep the orbit rig glued to the flight so releasing Tour never snaps
