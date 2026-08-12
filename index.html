@@ -591,9 +591,19 @@ const ATMO = {
   fogSunColor:     { value: C(0xFFC98A) },
   fogSunStrength:  { value: 0.85 },
   aerial:          { value: 0.0011 },
-  aerialNear:      { value: 330.0 },
+  aerialNear:      { value: 150.0 },
   aerialCool:      { value: C(0x9FB4D8) },
   aerialCoolAmt:   { value: 0.0 },
+  // Multi-band aerial perspective. The old ramp began at 330 units, but the Nile
+  // foreground sits at 275, the village at 274 and the escarpment front at 305 --
+  // so four of the six depth layers received exactly zero atmosphere and the
+  // system behaved as two states: off, then far desert. Start close and shape the
+  // response with a gamma curve so every band gets a distinct, monotonically
+  // rising amount without washing the foreground out.
+  aerialSpan:      { value: 620.0 },
+  aerialGamma:     { value: 1.55 },
+  aerialFar2:      { value: 430.0 },
+  aerialFar2Amt:   { value: 0.0 },
 };
 
 THREE.ShaderChunk.fog_pars_vertex = `
@@ -624,6 +634,7 @@ THREE.ShaderChunk.fog_pars_fragment = `
     uniform float fogFar;
   #endif
   uniform float fogGroundY, fogHeightFalloff, fogGroundBoost, fogSunStrength, aerial, aerialNear, aerialCoolAmt;
+  uniform float aerialSpan, aerialGamma, aerialFar2, aerialFar2Amt;
   uniform vec3 fogSunDir, fogSunColor, aerialCool;
 #endif`;
 
@@ -638,7 +649,8 @@ THREE.ShaderChunk.fog_fragment = `
   #endif
   // aerial perspective: saturation bleeds out of the FAR field only. It starts
   // beyond the monuments and never lifts blacks, so silhouettes stay intact.
-  float aer = clamp( ( vFogDepth - aerialNear ) * aerial, 0.0, 0.62 );
+  float aerT = clamp( ( vFogDepth - aerialNear ) / aerialSpan, 0.0, 1.0 );
+  float aer = clamp( pow( aerT, aerialGamma ) * aerial, 0.0, 0.62 );
   float aLum = dot( gl_FragColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) );
   gl_FragColor.rgb = mix( gl_FragColor.rgb, vec3( aLum ), aer * 0.42 );
   // local contrast compresses toward the region's own mean with distance, which
@@ -646,6 +658,12 @@ THREE.ShaderChunk.fog_fragment = `
   gl_FragColor.rgb = mix( gl_FragColor.rgb, vec3( aLum * 0.72 + 0.14 ), aer * 0.30 );
   // and a slight cool cast, scaled per preset so dawn and night keep their mood
   gl_FragColor.rgb = mix( gl_FragColor.rgb, gl_FragColor.rgb * aerialCool, aer * aerialCoolAmt );
+  // Second band: past ~430 units the far desert lifts toward the atmosphere's own
+  // colour faster than the plateau front does, which is what separates a horizon
+  // landmass from a cliff face. Ordinary distance fog cannot: at 654 units it
+  // contributes only 5 percent.
+  float far2 = smoothstep( aerialFar2, aerialFar2 + 260.0, vFogDepth );
+  gl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor, far2 * aerialFar2Amt );
   vec3 fogV = normalize( vFogWorld - cameraPosition );
   float sunAmt = max( dot( fogV, fogSunDir ), 0.0 );
   vec3 fogTinted = mix( fogColor, fogSunColor, pow( sunAmt, 5.0 ) * fogSunStrength );
@@ -2223,7 +2241,7 @@ const PRESETS = [
     skyTop: 0x122F62, skyMid: 0xA5719C, skyHor: 0xF6A472, skyGnd: 0x6B4A38,
     hemiSky: 0x7EA0D6, hemiGnd: 0x5A4A6A, hemiInt: 0.62,   // fill/key 0.447 -> 0.319
     fillCol: 0x6D86C8, fillInt: 0.40, fillDir: new THREE.Vector3(-0.7, 0.5, 0.4),
-    fog: 0xAEA3B6, fogD: 0.00044, fogSun: 0xFFD2A8, fogSunStr: 0.58, fogGround: 3.4, dust: 0.22, aerial: 0.00150, rim: 0.30, aerialCool: 0.55, rimCol: 0xFFC79A, exposure: 1.00, bloom: 0.48, stars: 0.18,
+    fog: 0xAEA3B6, fogD: 0.00044, fogSun: 0xFFD2A8, fogSunStr: 0.58, fogGround: 3.4, dust: 0.22, aerial: 0.74, aerialFar2: 0.17, rim: 0.30, aerialCool: 0.55, rimCol: 0xFFC79A, exposure: 1.00, bloom: 0.48, stars: 0.18,
     sunGlow: 0.75, sunSize: 0.0145, discInt: 12, hazeCol: 0xD9C4C6, haze: 0.42,
     torch: 0.20, waterShallow: 0x6BC3A0, waterDeep: 0x225E52, reflTint: 0xFFD8C0,
     reflStr: 0.92, sparkle: 1.15, waterGlow: 0.008, goldEm: 0.60, envInt: 1.15,
@@ -2235,7 +2253,7 @@ const PRESETS = [
     skyTop: 0x1655BE, skyMid: 0x5AA6F0, skyHor: 0xBADCFF, skyGnd: 0xA98F62,
     hemiSky: 0xA6D2FF, hemiGnd: 0xD2AE6C, hemiInt: 0.82,   // fill/key 0.422 -> 0.298
     fillCol: 0xBFD8FF, fillInt: 0.52, fillDir: new THREE.Vector3(-0.5, 0.35, -0.6),
-    fog: 0xB6D2EE, fogD: 0.00026, fogSun: 0xFFF4E2, fogSunStr: 0.35, fogGround: 1.3, dust: 0.09, aerial: 0.00115, rim: 0.12, aerialCool: 0.80, rimCol: 0xFFF2DC, exposure: 0.97, bloom: 0.40, stars: 0,
+    fog: 0xB6D2EE, fogD: 0.00026, fogSun: 0xFFF4E2, fogSunStr: 0.35, fogGround: 1.3, dust: 0.09, aerial: 0.56, aerialFar2: 0.09, rim: 0.12, aerialCool: 0.80, rimCol: 0xFFF2DC, exposure: 0.97, bloom: 0.40, stars: 0,
     sunGlow: 0.45, sunSize: 0.011, discInt: 16, hazeCol: 0xDCECFF, haze: 0.20,
     torch: 0, waterShallow: 0x50CE8C, waterDeep: 0x1B6B47, reflTint: 0xFFFFFF,
     reflStr: 0.80, sparkle: 1.6, waterGlow: 0.0, goldEm: 0.30, envInt: 1.55,
@@ -2247,7 +2265,7 @@ const PRESETS = [
     skyTop: 0x13265C, skyMid: 0xC96A6E, skyHor: 0xFF8C3A, skyGnd: 0x7A4A28,
     hemiSky: 0x5C6ACB, hemiGnd: 0x8A5A48, hemiInt: 0.58,
     fillCol: 0x7A82E0, fillInt: 0.55, fillDir: new THREE.Vector3(0.62, 0.45, 0.60),
-    fog: 0xC08A6E, fogD: 0.00036, fogSun: 0xFFB870, fogSunStr: 1.20, fogGround: 2.6, dust: 0.36, aerial: 0.00170, rim: 0.46, aerialCool: 0.30, rimCol: 0xFFC078, exposure: 1.00, bloom: 0.56, stars: 0.06,
+    fog: 0xC08A6E, fogD: 0.00036, fogSun: 0xFFB870, fogSunStr: 1.20, fogGround: 2.6, dust: 0.36, aerial: 0.80, aerialFar2: 0.15, rim: 0.46, aerialCool: 0.30, rimCol: 0xFFC078, exposure: 1.00, bloom: 0.56, stars: 0.06,
     sunGlow: 0.70, sunSize: 0.0155, discInt: 12, hazeCol: 0xFFB070, haze: 0.60,
     torch: 0.16, waterShallow: 0x55BF88, waterDeep: 0x1C5C41, reflTint: 0xFFC898,
     reflStr: 0.95, sparkle: 1.45, waterGlow: 0.012, goldEm: 0.85, envInt: 1.20,
@@ -2259,14 +2277,14 @@ const PRESETS = [
     skyTop: 0x040A1C, skyMid: 0x081436, skyHor: 0x11224C, skyGnd: 0x080E20,
     hemiSky: 0x27395F, hemiGnd: 0x0F1426, hemiInt: 0.30,   // fill/key 1.118 -> 0.46
     fillCol: 0x3F5A9A, fillInt: 0.14, fillDir: new THREE.Vector3(-0.5, 0.4, -0.6),
-    fog: 0x111A34, fogD: 0.00042, fogSun: 0x4C6AA8, fogSunStr: 0.55, fogGround: 2.4, dust: 0.07, aerial: 0.00070, rim: 0.025, aerialCool: 0.65, rimCol: 0xA8C4FF, exposure: 1.25, bloom: 0.95, stars: 1.0,
+    fog: 0x111A34, fogD: 0.00042, fogSun: 0x4C6AA8, fogSunStr: 0.55, fogGround: 2.4, dust: 0.07, aerial: 0.40, aerialFar2: 0.13, rim: 0.025, aerialCool: 0.65, rimCol: 0xA8C4FF, exposure: 1.25, bloom: 0.95, stars: 1.0,
     sunGlow: 0.35, sunSize: 0.019, discInt: 8, hazeCol: 0x1E2E52, haze: 0.22,
     torch: 1.0, waterShallow: 0x2E8B6E, waterDeep: 0x0E3A3C, reflTint: 0xB9CCFF,
     reflStr: 1.0, sparkle: 0.95, waterGlow: 0.026, goldEm: 1.20, envInt: 1.10,
   }),
 ];
 
-const NUMS = ['sunInt', 'hemiInt', 'fillInt', 'fogD', 'exposure', 'bloom', 'stars', 'fogSunStr', 'fogGround', 'dust', 'aerial', 'rim', 'aerialCool',
+const NUMS = ['sunInt', 'hemiInt', 'fillInt', 'fogD', 'exposure', 'bloom', 'stars', 'fogSunStr', 'fogGround', 'dust', 'aerial', 'aerialFar2', 'rim', 'aerialCool',
   'sunGlow', 'sunSize', 'discInt', 'haze', 'torch', 'reflStr', 'sparkle', 'waterGlow', 'goldEm', 'envInt'];
 const COLS = ['sunCol', 'skyTop', 'skyMid', 'skyHor', 'skyGnd', 'hemiSky', 'hemiGnd', 'fillCol', 'fog', 'fogSun', 'rimCol', 'hazeCol',
   'waterShallow', 'waterDeep', 'reflTint'];
@@ -2314,6 +2332,7 @@ function applyLighting(t) {
   ATMO.fogGroundBoost.value = live.fogGround;
   ATMO.aerial.value = live.aerial;
   ATMO.aerialCoolAmt.value = live.aerialCool;
+  ATMO.aerialFar2Amt.value = live.aerialFar2;
   RIM.uRimStr.value = live.rim;
   RIM.uRimCol.value.copy(live.rimCol);
   renderer.toneMappingExposure = live.exposure;
