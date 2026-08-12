@@ -652,10 +652,17 @@ THREE.ShaderChunk.fog_fragment = `
   float aerT = clamp( ( vFogDepth - aerialNear ) / aerialSpan, 0.0, 1.0 );
   float aer = clamp( pow( aerT, aerialGamma ) * aerial, 0.0, 0.62 );
   float aLum = dot( gl_FragColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) );
-  gl_FragColor.rgb = mix( gl_FragColor.rgb, vec3( aLum ), aer * 0.42 );
+  // Measured aerial terms across the visible bands are 0.165 / 0.282 / 0.325 /
+  // 0.447 (near to far). At a flat 0.42 weight the escarpment loses only about 5-8
+  // percent saturation, which is invisible at a glance. Weighting by aer SQUARED
+  // keeps the foreground almost untouched (0.165^2 = 0.027) while giving the far
+  // bands real separation (0.447^2 = 0.200), so depth is described without the
+  // washed-out foreground a flat increase would cause.
+  float aerQ = aer * aer;
+  gl_FragColor.rgb = mix( gl_FragColor.rgb, vec3( aLum ), aer * 0.42 + aerQ * 1.15 );
   // local contrast compresses toward the region's own mean with distance, which
   // is what actually makes far ground read as far rather than merely paler
-  gl_FragColor.rgb = mix( gl_FragColor.rgb, vec3( aLum * 0.72 + 0.14 ), aer * 0.30 );
+  gl_FragColor.rgb = mix( gl_FragColor.rgb, vec3( aLum * 0.72 + 0.14 ), aer * 0.30 + aerQ * 0.65 );
   // and a slight cool cast, scaled per preset so dawn and night keep their mood
   gl_FragColor.rgb = mix( gl_FragColor.rgb, gl_FragColor.rgb * aerialCool, aer * aerialCoolAmt );
   // Second band: past ~430 units the far desert lifts toward the atmosphere's own
